@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { runGoldenCase } from "./engine.js";
 
@@ -7,11 +8,11 @@ const QUESTION = "中国新能源乘用车渗透率增长是否受到公共充�
 
 interface CliOptions {
   question: string;
-  llmMode: "auto" | "off";
+  llmMode: "cached" | "auto";
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { question: QUESTION, llmMode: "off" };
+export function parseArgs(argv: string[]): CliOptions {
+  const options: CliOptions = { question: QUESTION, llmMode: "cached" };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--question" || arg === "-q") {
@@ -28,7 +29,7 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
-async function executeDemo(index: number, root: string, options: CliOptions) {
+export async function executeDemo(index: number, root: string, options: CliOptions) {
   const started = performance.now();
   const workspaceDir = join(root, ".insightforge", "cli-demo", `${Date.now()}-${index}`);
   await mkdir(workspaceDir, { recursive: true });
@@ -52,20 +53,26 @@ async function executeDemo(index: number, root: string, options: CliOptions) {
   };
 }
 
-async function main() {
-  const root = process.cwd();
-  const command = process.argv[2] ?? "demo";
+export async function runCli(argv: string[] = process.argv, root = process.cwd(), executor = executeDemo) {
+  const command = argv[2] ?? "demo";
   if (command !== "demo" && command !== "triple") throw new Error("Usage: insightforge demo|triple [--question <q>] [--llm]");
-  const options = parseArgs(process.argv);
+  const options = parseArgs(argv);
   const count = command === "triple" ? 3 : 1;
   const results = [];
-  for (let index = 1; index <= count; index += 1) results.push(await executeDemo(index, root, options));
+  for (let index = 1; index <= count; index += 1) results.push(await executor(index, root, options));
   const successful = results.every((result) => result.terminalStatus === "NEEDS_REVIEW" && result.steps.every((step) => step.endsWith(":success")));
   console.log(JSON.stringify({ successful, runs: results }, null, 2));
   if (!successful) process.exitCode = 1;
+  return { successful, runs: results };
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "Demo failed");
-  process.exitCode = 1;
-});
+export function cliErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Demo failed";
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void runCli().catch((error) => {
+    console.error(cliErrorMessage(error));
+    process.exitCode = 1;
+  });
+}

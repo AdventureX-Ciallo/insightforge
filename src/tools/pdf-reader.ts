@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+
 export async function readPdfPages(path: string) {
-  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const bytes = new Uint8Array(await readFile(path));
   const document = await getDocument({ data: bytes, useSystemFonts: true }).promise;
   const pages: Array<{ page: number; text: string }> = [];

@@ -304,9 +304,13 @@ function renderArtifacts(panel, run) {
   grid.append(report);
   run.artifacts.forEach((artifact) => {
     const card = node("article", "artifact-card");
-    const label = artifact.kind === "PPTX" ? "PPTX" : "JSON";
-    const title = artifact.kind === "PPTX" ? "可编辑 PowerPoint" : "机器可读证据包";
-    const description = artifact.kind === "PPTX" ? "固定 5 页模板；标题、正文和数字均为可编辑对象。" : "信源、证据、数据、判断、审查、人工决定与成果索引。";
+    const meta = {
+      PPTX: { label: "PPTX", title: "可编辑 PowerPoint", description: "固定 5 页模板；标题、正文和数字均为可编辑对象。" },
+      EVIDENCE_JSON: { label: "JSON", title: "机器可读证据包", description: "信源、证据、数据、判断、审查、人工决定与成果索引。" },
+      REPORT_MD: { label: "MD", title: "Markdown 报告", description: "结论、证据、冲突、假设与来源定位的纯文本报告。" },
+      REPORT_PDF: { label: "PDF", title: "PDF 报告", description: "版式报告，适配分享与打印。" },
+    }[artifact.kind] ?? { label: artifact.kind, title: artifact.kind, description: "" };
+    const { label, title, description } = meta;
     card.append(node("div", "artifact-icon", label), node("h4", "", title), node("p", "", description));
     card.append(node("div", "artifact-meta", `${(artifact.sizeBytes / 1024).toFixed(1)} KB · SHA-256 ${artifact.sha256}`));
     const link = node("a", "download-link", `下载 ${label}`);

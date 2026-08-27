@@ -10,10 +10,12 @@
   "scripts": {
     "build": "tsc && node scripts/copy-static.mjs",
     "clean": "node scripts/clean.mjs",
+    "coverage": "NODE_ENV=test c8 --include 'src/**' --all --check-coverage --lines 100 --branches 100 node --import tsx --test tests/*.test.ts",
     "demo": "node dist/cli.js demo",
     "demo:triple": "node dist/cli.js triple",
     "dev": "tsx watch src/server.ts",
     "lint": "tsc --noEmit",
+    "package:source": "npm run secret-scan && node scripts/package-source.mjs",
     "record:demo": "node scripts/record-demo.mjs",
     "secret-scan": "node scripts/secret-scan.mjs",
     "smoke": "node scripts/smoke.mjs",
@@ -21,18 +23,19 @@
     "test": "NODE_ENV=test node --import tsx --test tests/*.test.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run lint && npm test && npm run build && npm run secret-scan"
+    "verify": "npm run lint && npm run coverage && npm run build && npm run secret-scan"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "pdfjs-dist": "5.4.149",
     "jszip": "3.10.1",
+    "pdfjs-dist": "5.4.149",
     "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
+    "c8": "^12.0.0",
     "playwright": "1.60.0",
     "tsx": "4.21.0",
     "typescript": "5.9.3"

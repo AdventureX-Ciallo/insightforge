@@ -28,7 +28,7 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
   await expect(page.locator(".state-card.running")).toBeVisible();
   await expect(page.locator("#terminal-status")).toHaveText("NEEDS_REVIEW", { timeout: 15_000 });
   await expect(page.locator(".state-card.success")).toHaveCount(5);
-  await expect(page.locator(".tool-row")).toHaveCount(4);
+  await expect(page.locator(".tool-row")).toHaveCount(6);
 
   await page.getByRole("button", { name: /候选结论/ }).click();
   await expect(page.locator(".conclusion-card")).toHaveCount(4);
@@ -48,7 +48,7 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
   await charging.getByRole("button", { name: "编辑" }).click();
   await page.locator("#edit-text").fill("人工修订：名义供给增长不能替代区域利用率验证。");
   await page.getByRole("button", { name: "保存并确认" }).click();
-  await expect(charging).toContainText("HUMAN_CONFIRMED");
+  await expect(charging).toContainText("PENDING_REVIEW");
 
   await page.getByRole("button", { name: /审查修正/ }).click();
   await expect.poll(() => page.locator(".audit-card").count()).toBeGreaterThanOrEqual(6);
@@ -58,11 +58,16 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
 
   await page.getByRole("button", { name: /来源更新/ }).click();
   await page.getByRole("button", { name: /发现新版来源/ }).click();
-  await expect(page.getByText("来源已更新到 v2")).toBeVisible();
-  await expect(page.locator(".impact")).toHaveCount(5);
+  // 人工决定之后来源更新要沿版本链重导出全部成果（含 PDF 浏览器渲染），耗时可能超过默认 5 秒。
+  await expect(page.getByText("来源已更新到 v2")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => page.locator(".impact").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(7);
+  await expect.poll(() => page.locator(".impact").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(7);
 
   await page.getByRole("button", { name: /成果交付/ }).click();
-  await expect(page.locator(".artifact-card")).toHaveCount(3);
+  // 路线图 P1-2 之后 DELIVER 产出五类成果卡片：交互报告 + MD + PDF + PPTX + JSON。
+  await expect(page.locator(".artifact-card")).toHaveCount(5);
+  await expect(page.getByText("Markdown").first()).toBeVisible();
+  await expect(page.getByText("PDF").first()).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("link", { name: "下载 PPTX" }).click();
   const download = await downloadPromise;

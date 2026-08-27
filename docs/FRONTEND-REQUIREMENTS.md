@@ -1,7 +1,7 @@
 # InsightForge 前端需求书
 
 - 版本：`DRAFT 1.3`
-- 状态：`待低保真评审；开发暂停`
+- 状态：`ACTIVE HANDOFF — ABloom 负责实现与收口`
 - 适用入口：本地 Web 工作台 `/`
 - 目标桌面尺寸：评委笔记本 Chromium；不做移动端专项适配
 
@@ -145,7 +145,7 @@ Locator 至少展示 URL/标题/摘录、PDF 文件名与页码、CSV 列与行�
 
 - `input[type=file]` accept PDF/CSV/XLSX/TXT。
 - 显示 5 MiB 限制和“上传不等于成为证据”的说明。
-- 若本期尚未把任意上传文件接入 COLLECT，入口标题必须是“验证并保存资料”，成功状态必须持续显示 `已保存，尚未进入证据链`。
+- 上传成功后保存服务端返回的 upload ID；启动任务时将选中的 ID 通过 `POST /api/runs` 的 `uploadIds` 数组传入。只有运行对象返回该 ID 且出现 `local-file-reader` 事件后，UI 才能写“已进入本轮 COLLECT”；否则只显示“已验证并保存”。
 - 成功文案只有在浏览器本地 SHA、POST 回执和 GET 复核三者一致后显示。
 - 成功只用纯文本展示原文件名、净化文件名、大小和 SHA。
 - 拒绝伪装格式、超限、路径穿越、NUL/非法 UTF-8、异常 XLSX；错误不含服务器路径或环境信息。

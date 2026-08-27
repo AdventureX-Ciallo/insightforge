@@ -56,10 +56,12 @@ test("HTTP entrypoint runs, persists, reviews, updates, and downloads real artif
     const decision = await fetch(`${baseUrl}/api/runs/${runId}/decisions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ conclusionId: "conclusion-charging", action: "EDIT", text: "人工修订后的可交付判断。" }),
+      body: JSON.stringify({ conclusionId: "conclusion-charging-growth", action: "EDIT", text: "人工修订后的候选判断。" }),
     });
     assert.equal(decision.status, 200);
-    assert.equal(((await decision.json()) as { run: { conclusions: Array<{ id: string; type: string }> } }).run.conclusions.find((item) => item.id === "conclusion-charging")?.type, "HUMAN_CONFIRMED");
+    const edited = ((await decision.json()) as { run: { conclusions: Array<{ id: string; type: string; reviewStatus: string }> } }).run.conclusions.find((item) => item.id === "conclusion-charging-growth");
+    assert.equal(edited?.type, "AI_JUDGMENT");
+    assert.equal(edited?.reviewStatus, "PENDING_REVIEW");
 
     const update = await fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" });
     assert.equal(update.status, 200);
@@ -70,6 +72,11 @@ test("HTTP entrypoint runs, persists, reviews, updates, and downloads real artif
     assert.match(artifact.headers.get("content-type") ?? "", /presentationml/);
     const bytes = new Uint8Array(await artifact.arrayBuffer());
     assert.equal(new TextDecoder().decode(bytes.slice(0, 2)), "PK");
+    const originalArtifact = await fetch(`${baseUrl}/api/runs/${runId}/artifacts/PPTX?version=1`);
+    assert.equal(originalArtifact.status, 200);
+    const originalBytes = new Uint8Array(await originalArtifact.arrayBuffer());
+    assert.equal(new TextDecoder().decode(originalBytes.slice(0, 2)), "PK");
+    assert.notDeepEqual(originalBytes, bytes, "the immutable v1 deck remains downloadable and differs from current");
 
     const traversal = await fetch(`${baseUrl}/../../../../etc/passwd`);
     assert.equal(traversal.status, 404);

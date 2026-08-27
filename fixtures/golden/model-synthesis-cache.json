@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "SYNTHESIS",
+  "researchQuestion": "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+  "generatedAt": "2026-08-27T09:40:00.000Z",
+  "provider": "Codex authenticated model task",
+  "model": "GPT-5 family",
+  "promptSha256": "af31c7f7804546e60de6b4e246fed76e2ceb257e5546d54642b73b0d56a51d85",
+  "conclusions": [
+    {
+      "role": "PENETRATION_CONFLICT",
+      "text": "2024 年新能源乘用车国内零售渗透率 47.6% 与当时预测输入重算的全汽车销量份额 37.1% 不可直接合并；两值应同时保留，相关判断必须先限定车辆对象、分母、数据阶段和交易口径。",
+      "evidenceIds": ["evidence-source-web-association", "evidence-market-csv"],
+      "assumptionIds": [],
+      "evidenceStatus": "CONFLICT",
+      "missingEvidence": []
+    },
+    {
+      "role": "CHARGING_GROWTH",
+      "text": "公共充电桩约 31.3% 的同比增长证明名义基础设施仍在扩张，但桩数量增长不能替代地域分布、可用率和高峰利用率验证。",
+      "evidenceIds": ["evidence-source-web-charging", "evidence-market-csv", "evidence-pdf-page-1"],
+      "assumptionIds": [],
+      "evidenceStatus": "SUPPORTED",
+      "missingEvidence": []
+    },
+    {
+      "role": "ADEQUACY_ESTIMATE",
+      "text": "在明确采用 15% 利用率折损这一演示情景假设时，风险调整后的名义公共充电供给约为 3.04 百万个；该估算只用于敏感性展示，不能升级为全国实际利用率事实。",
+      "evidenceIds": ["evidence-source-web-charging", "evidence-market-csv"],
+      "assumptionIds": ["assumption-utilization-gap"],
+      "evidenceStatus": "SUPPORTED",
+      "missingEvidence": []
+    },
+    {
+      "role": "CAUSALITY_GAP",
+      "text": "现有全国描述性资料不足以证明公共充电基础设施是新能源乘用车渗透率增长的单一因果约束；在地区对照、利用率和混杂因素资料补齐前，这一判断必须保持证据不足。",
+      "evidenceIds": ["evidence-pdf-page-2"],
+      "assumptionIds": [],
+      "evidenceStatus": "INSUFFICIENT_EVIDENCE",
+      "missingEvidence": [
+        "地区层面的公共充电供给、家充、销量和利用率对照",
+        "价格、车型、政策、收入和城市结构等混杂因素",
+        "可支持因果识别的时间序列、自然实验或其他研究设计"
+      ]
+    }
+  ]
+}

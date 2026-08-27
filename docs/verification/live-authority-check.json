@@ -1,6 +1,6 @@
 {
   "mode": "live-authority-check",
-  "checkedAt": "2026-08-27T05:21:21.302Z",
+  "checkedAt": "2026-08-27T15:39:53.405Z",
   "results": [
     {
       "title": "中汽协 2024 中国汽车市场预测",
@@ -9,7 +9,7 @@
       "httpStatus": null,
       "sizeBytes": 0,
       "sha256": "",
-      "error": "Network request failed"
+      "error": "fetch failed"
     },
     {
       "title": "国务院客户端转载：2024 年中国汽车产销量",
@@ -32,12 +32,12 @@
     {
       "title": "中国充电联盟：2024 年全国充换电基础设施运行情况",
       "url": "https://www.evcipa.org.cn/newsinfo/8137834.html",
-      "status": "verified",
-      "httpStatus": 200,
-      "sizeBytes": 1433,
-      "sha256": "57df779cae56bd336a99655ea1d8fbf8020b65d121e4c9960840feafe93e0172",
-      "error": null
+      "status": "failed",
+      "httpStatus": null,
+      "sizeBytes": 0,
+      "sha256": "",
+      "error": "Authority page is missing expected content markers"
     }
   ],
-  "boundary": "Three of four allowlisted authority URLs were retrieved and hashed in the product runtime. The CAAM origin timed out in this runtime; its exact URL and figures were separately checked through web retrieval, so it is not marked as a successful product-runtime fetch."
+  "boundary": "Direct runtime verification requires expected content markers. HTTP 200 WAF, challenge, shell, or error pages are not accepted as authority content. Two URLs passed direct byte verification; two remained failed."
 }

@@ -5,13 +5,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { evidencePackageSchema, researchRunSchema, workflowStates, type ResearchRun, type RunStep } from "./domain.js";
-import { runGoldenCase } from "./engine.js";
-import { hashFile, hashValue } from "./hash.js";
-import { applyHumanDecision, type HumanDecisionInput } from "./human-decision.js";
+import { researchRunSchema, workflowStates, type ArtifactVersion, type ResearchRun, type RunStep } from "./domain.js";
+import { buildBoundaryQuestions } from "./boundary-questions.js";
+import { runGoldenCase, type CollectedUploadInput } from "./engine.js";
+import { applyHumanDecisionAndPersist, type HumanDecisionInput } from "./human-decision.js";
 import { applySourceUpdate } from "./source-update.js";
-import { writePptx } from "./tools/pptx-export.js";
-import { checkLiveSources } from "./tools/live-source-check.js";
+import { loadApiLlmSettings, publicLlmSettings, saveApiLlmSettings, SettingsStoreError } from "./settings-store.js";
+import { researchPresets } from "./presets.js";
+import { checkLiveSources, type AuthorityFetcher } from "./tools/live-source-check.js";
+import { searchLiveSingleProvider, type LiveSearchFetcher } from "./tools/live-source-search.js";
+import { searchEngines, searchSelectedEngine, type SearchFetcher, type SearchResolver } from "./tools/search-engines.js";
 import { MAX_UPLOAD_SIZE_BYTES, sanitizeUploadFileName, UploadValidationError } from "./tools/upload-validator.js";
 import { persistUpload, UploadStoreError, verifyPersistedUpload } from "./upload-store.js";
 
@@ -44,6 +47,33 @@ function publicRun(run: ResearchRun) {
   return {
     ...run,
     artifacts: run.artifacts.map(({ path: _path, ...artifact }) => artifact),
+    artifactHistory: run.artifactHistory.map(({ path: _path, ...artifact }) => artifact),
+  };
+}
+
+function publicArtifactVersion(run: ResearchRun, version: ArtifactVersion) {
+  const artifacts = [...run.artifacts, ...run.artifactHistory]
+    .filter((artifact) => version.artifactIds.includes(artifact.id))
+    .map(({ path: _path, ...artifact }) => artifact);
+  const trigger = version.trigger === "INITIAL_DELIVER"
+    ? "initial"
+    : version.trigger === "SOURCE_UPDATE"
+      ? "source-update"
+      : "human-decision";
+  return {
+    id: version.id,
+    researchSnapshotId: version.researchSnapshotId,
+    version: version.version,
+    createdAt: version.createdAt,
+    trigger,
+    triggerRef: version.triggerRef,
+    artifacts,
+    sources: version.sources,
+    evidence: version.evidence,
+    conclusions: version.conclusions,
+    adjustmentNote: version.adjustmentNote,
+    status: version.status,
+    supersedesId: version.supersedesId,
   };
 }
 
@@ -52,6 +82,10 @@ export interface ServerOptions {
   publicDir: string;
   workspaceDir: string;
   stepDelayMs?: number;
+  searchFetcher?: SearchFetcher;
+  searchResolver?: SearchResolver;
+  authorityFetcher?: AuthorityFetcher;
+  legacySearchFetcher?: LiveSearchFetcher;
 }
 
 function pendingSteps(): RunStep[] {
@@ -78,7 +112,7 @@ function sendJson(response: ServerResponse, status: number, value: unknown) {
   response.end(body);
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+export async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -97,7 +131,7 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   return parsed as Record<string, unknown>;
 }
 
-async function readUploadBytes(request: IncomingMessage) {
+export async function readUploadBytes(request: IncomingMessage) {
   const rawLength = request.headers["content-length"];
   if (rawLength !== undefined) {
     const declaredLength = Number(rawLength);
@@ -124,7 +158,7 @@ async function readUploadBytes(request: IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
-function uploadFileName(request: IncomingMessage) {
+export function uploadFileName(request: IncomingMessage) {
   const header = request.headers["x-insightforge-file-name"];
   if (typeof header !== "string" || !header) {
     request.resume();
@@ -141,65 +175,60 @@ function uploadFileName(request: IncomingMessage) {
   }
 }
 
-function publicHttpError(error: unknown) {
+export function publicHttpError(error: unknown) {
   if (error instanceof RequestError) return { status: error.status, message: error.message };
   if (error instanceof UploadValidationError || error instanceof UploadStoreError) {
     return { status: error.statusCode, message: error.message };
   }
+  if (error instanceof SettingsStoreError) return { status: error.statusCode, message: error.message };
   return { status: 500, message: "Request failed" };
 }
 
-function inside(root: string, path: string) {
+export function inside(root: string, path: string) {
   const rel = relative(resolve(root), resolve(path));
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-function contentType(path: string) {
+export function contentType(path: string) {
   const extension = extname(path).toLowerCase();
   if (extension === ".html") return "text/html; charset=utf-8";
   if (extension === ".css") return "text/css; charset=utf-8";
   if (extension === ".js") return "text/javascript; charset=utf-8";
   if (extension === ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  if (extension === ".pdf") return "application/pdf";
+  if (extension === ".md") return "text/markdown; charset=utf-8";
   if (extension === ".json") return "application/json; charset=utf-8";
   return "application/octet-stream";
 }
 
-async function refreshDecisionArtifacts(run: ResearchRun, workspaceDir: string) {
-  const pptx = run.artifacts.find((item) => item.kind === "PPTX");
-  const evidenceJson = run.artifacts.find((item) => item.kind === "EVIDENCE_JSON");
-  if (!pptx || !evidenceJson || !inside(workspaceDir, pptx.path) || !inside(workspaceDir, evidenceJson.path)) {
-    throw new Error("Artifact paths are outside the allowed workspace");
+export function staticFilePath(publicDir: string, pathname: string) {
+  const requested = pathname === "/" ? "index.html" : pathname.startsWith("/") ? pathname.slice(1) : pathname;
+  const filePath = resolve(publicDir, requested);
+  if (!inside(publicDir, filePath)) throw new RequestError(404, "Not found");
+  return filePath;
+}
+
+export function serverBaseUrl(host: string, address: ReturnType<Server["address"]>) {
+  if (!address || typeof address === "string") throw new Error("Could not resolve server address");
+  return `http://${host}:${address.port}`;
+}
+
+export function settleServerClose(
+  error: Error | undefined,
+  resolveClose: () => void,
+  rejectClose: (error: Error) => void,
+) {
+  if (error) {
+    rejectClose(error);
+    return;
   }
-  await writePptx(run, pptx.path);
-  const evidencePackage = evidencePackageSchema.parse({
-    schemaVersion: run.schemaVersion,
-    researchQuestion: run.researchQuestion,
-    synthesisMode: run.synthesisMode,
-    sources: run.sources,
-    evidence: run.evidence,
-    data: run.data,
-    claims: run.claims,
-    conclusions: run.conclusions,
-    auditFindings: run.auditFindings,
-    humanDecisions: run.humanDecisions,
-    artifacts: run.artifacts.map((item) => ({ kind: item.kind, fileName: basename(item.path) })),
-  });
-  await writeFile(evidenceJson.path, `${JSON.stringify(evidencePackage, null, 2)}\n`, "utf8");
-  const pptxInfo = await stat(pptx.path);
-  const jsonInfo = await stat(evidenceJson.path);
-  const pptxDigest = await hashFile(pptx.path);
-  const jsonDigest = await hashFile(evidenceJson.path);
-  run.artifacts = [
-    { id: hashValue({ fileName: basename(pptx.path), pptxDigest }), kind: "PPTX", path: pptx.path, sha256: pptxDigest, sizeBytes: pptxInfo.size },
-    { id: hashValue({ fileName: basename(evidenceJson.path), jsonDigest }), kind: "EVIDENCE_JSON", path: evidenceJson.path, sha256: jsonDigest, sizeBytes: jsonInfo.size },
-  ];
-  const runDir = resolve(workspaceDir, run.id);
-  await writeFile(join(runDir, "run.json"), `${JSON.stringify(run, null, 2)}\n`, "utf8");
-  await writeFile(join(workspaceDir, "current.json"), `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  resolveClose();
 }
 
 export function createInsightForgeServer(options: ServerOptions) {
   const jobs = new Map<string, Job>();
+  const searchFetcher = options.searchFetcher ?? fetch;
+  const stepDelayMs = options.stepDelayMs ?? 120;
   let currentRun: ResearchRun | undefined;
   let server: Server | undefined;
 
@@ -208,19 +237,21 @@ export function createInsightForgeServer(options: ServerOptions) {
     await writeFile(join(options.workspaceDir, `${job.runId}-progress.json`), `${JSON.stringify(job, null, 2)}\n`, "utf8");
   }
 
-  async function startRun(runId: string, question: string) {
-    const job = jobs.get(runId);
-    if (!job) return;
+  async function startRun(runId: string, question: string, uploadedFiles: CollectedUploadInput[]) {
+    const job = jobs.get(runId)!;
     try {
+      const apiLlmConfig = await loadApiLlmSettings(options.workspaceDir);
       const run = await runGoldenCase({
         researchQuestion: question,
         fixtureDir: options.fixtureDir,
         workspaceDir: options.workspaceDir,
         runId,
-        stepDelayMs: options.stepDelayMs ?? 120,
-        // LLM 候选判断（模型提出）默认关闭：只有显式设置 INSIGHTFORGE_LLM=1 且提供密钥时启用，
-        // 无网络/无密钥环境下演示行为与测试基线完全一致。
-        llmMode: process.env.INSIGHTFORGE_LLM === "1" ? "auto" : "off",
+        stepDelayMs,
+        // 黄金路径默认使用经过 SHA-256、问题域、Schema 与引用 ID 校验的认证模型缓存；
+        // 显式 INSIGHTFORGE_LLM=1 才调用单一在线端点，不做模型 fallback。
+        llmMode: apiLlmConfig || process.env.INSIGHTFORGE_LLM === "1" ? "auto" : "cached",
+        ...(apiLlmConfig ? { llmConfig: apiLlmConfig } : {}),
+        uploadedFiles,
         onProgress: async (steps) => {
           job.steps = steps;
           await persistJob(job);
@@ -242,10 +273,14 @@ export function createInsightForgeServer(options: ServerOptions) {
 
   async function route(request: IncomingMessage, response: ServerResponse) {
     try {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      const method = request.method ?? "GET";
+      const url = new URL(request.url!, "http://localhost");
+      const method = request.method!;
       if (method === "GET" && url.pathname === "/api/health") {
-        sendJson(response, 200, { ok: true, offlineDemo: true });
+        sendJson(response, 200, { ok: true, offlineDemo: true, defaultSynthesisMode: "CACHED_MODEL_OUTPUT" });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/api/presets") {
+        sendJson(response, 200, researchPresets);
         return;
       }
       if (method === "GET" && url.pathname === "/api/current") {
@@ -254,6 +289,15 @@ export function createInsightForgeServer(options: ServerOptions) {
           return;
         }
         sendJson(response, 200, { run: publicRun(currentRun) });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/api/settings/llm") {
+        sendJson(response, 200, publicLlmSettings(await loadApiLlmSettings(options.workspaceDir)));
+        return;
+      }
+      if (method === "POST" && url.pathname === "/api/settings/llm") {
+        const config = await saveApiLlmSettings(options.workspaceDir, await readJson(request));
+        sendJson(response, 200, publicLlmSettings(config));
         return;
       }
       if (method === "POST" && url.pathname === "/api/uploads") {
@@ -273,7 +317,29 @@ export function createInsightForgeServer(options: ServerOptions) {
         return;
       }
       if (method === "POST" && url.pathname === "/api/sources/live-check") {
-        sendJson(response, 200, await checkLiveSources());
+        sendJson(response, 200, await checkLiveSources(options.authorityFetcher));
+        return;
+      }
+      if (method === "POST" && url.pathname === "/api/sources/live-search") {
+        const body = await readJson(request);
+        const query = typeof body.query === "string" ? body.query : "";
+        sendJson(response, 200, await searchLiveSingleProvider(query, options.legacySearchFetcher, options.searchResolver));
+        return;
+      }
+      if (method === "POST" && url.pathname === "/api/sources/search") {
+        const body = await readJson(request);
+        const engine = body.engine;
+        const query = typeof body.query === "string" ? body.query.trim() : "";
+        if (typeof engine !== "string" || !searchEngines.includes(engine as (typeof searchEngines)[number]) || query.length < 2 || query.length > 160) {
+          sendJson(response, 400, { error: "engine must be bing, google, or baidu and query must contain 2–160 characters" });
+          return;
+        }
+        sendJson(response, 200, await searchSelectedEngine(
+          engine as (typeof searchEngines)[number],
+          query,
+          searchFetcher,
+          options.searchResolver,
+        ));
         return;
       }
       if (method === "POST" && url.pathname === "/api/runs") {
@@ -283,11 +349,21 @@ export function createInsightForgeServer(options: ServerOptions) {
           sendJson(response, 400, { error: "researchQuestion must contain 8–240 characters" });
           return;
         }
+        const uploadIds = body.uploadIds === undefined ? [] : body.uploadIds;
+        if (!Array.isArray(uploadIds) || uploadIds.length > 8 || uploadIds.some((id) => typeof id !== "string")) {
+          sendJson(response, 400, { error: "uploadIds must be an array containing at most 8 upload identifiers" });
+          return;
+        }
+        const uploadedFiles: CollectedUploadInput[] = [];
+        for (const id of uploadIds) {
+          const verified = await verifyPersistedUpload(options.workspaceDir, id as string);
+          uploadedFiles.push({ id: verified.id, kind: verified.kind, originalFileName: verified.originalFileName, path: resolve(options.workspaceDir, verified.storageKey), sha256: verified.sha256, uploadedAt: verified.uploadedAt });
+        }
         const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
         const job: Job = { runId, status: "running", steps: pendingSteps(), error: null };
         jobs.set(runId, job);
         await persistJob(job);
-        void startRun(runId, researchQuestion);
+        void startRun(runId, researchQuestion, uploadedFiles);
         sendJson(response, 202, { runId, statusUrl: `/api/runs/${runId}` });
         return;
       }
@@ -315,12 +391,15 @@ export function createInsightForgeServer(options: ServerOptions) {
           sendJson(response, 400, { error: "Invalid human decision" });
           return;
         }
+        const decisionContext = {
+          reason: typeof body.reason === "string" ? body.reason : undefined,
+          scopeNote: typeof body.scopeNote === "string" ? body.scopeNote : undefined,
+        };
         const input = action === "EDIT"
-          ? { conclusionId, action, text: typeof body.text === "string" ? body.text : "" }
-          : { conclusionId, action };
-        job.run = applyHumanDecision(job.run, input as HumanDecisionInput);
+          ? { conclusionId, action, text: typeof body.text === "string" ? body.text : "", ...decisionContext }
+          : { conclusionId, action, ...decisionContext };
+        job.run = await applyHumanDecisionAndPersist(job.run, input as HumanDecisionInput, options.workspaceDir);
         currentRun = job.run;
-        await refreshDecisionArtifacts(job.run, options.workspaceDir);
         await persistJob(job);
         sendJson(response, 200, { run: publicRun(job.run) });
         return;
@@ -339,10 +418,51 @@ export function createInsightForgeServer(options: ServerOptions) {
         sendJson(response, 200, { run: publicRun(job.run) });
         return;
       }
-      const artifactMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/(PPTX|EVIDENCE_JSON)$/);
+      const boundaryMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/boundary-questions$/);
+      if (method === "GET" && boundaryMatch?.[1]) {
+        const job = jobs.get(boundaryMatch[1]);
+        if (!job) {
+          sendJson(response, 404, { error: "Run not found" });
+          return;
+        }
+        if (!job.run) {
+          sendJson(response, 409, { error: "Run is not completed" });
+          return;
+        }
+        sendJson(response, 200, buildBoundaryQuestions(job.run));
+        return;
+      }
+      const versionMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifact-versions(?:\/([1-9]\d*))?$/);
+      if (method === "GET" && versionMatch?.[1]) {
+        const job = jobs.get(versionMatch[1]);
+        if (!job?.run) {
+          sendJson(response, 404, { error: "Completed run not found" });
+          return;
+        }
+        if (versionMatch[2]) {
+          const version = job.run.artifactVersions.find((item) => item.version === Number(versionMatch[2]));
+          if (!version) {
+            sendJson(response, 404, { error: "Artifact version not found" });
+            return;
+          }
+          sendJson(response, 200, publicArtifactVersion(job.run, version));
+          return;
+        }
+        sendJson(response, 200, [...job.run.artifactVersions]
+          .sort((left, right) => left.version - right.version)
+          .map((version) => publicArtifactVersion(job.run as ResearchRun, version)));
+        return;
+      }
+      const artifactMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/(PPTX|EVIDENCE_JSON|REPORT_MD|REPORT_PDF)$/);
       if (method === "GET" && artifactMatch?.[1] && artifactMatch[2]) {
         const job = jobs.get(artifactMatch[1]);
-        const artifact = job?.run?.artifacts.find((item) => item.kind === artifactMatch[2]);
+        const requestedVersion = url.searchParams.get("version");
+        if (requestedVersion !== null && !/^[1-9]\d*$/u.test(requestedVersion)) {
+          sendJson(response, 400, { error: "Artifact version must be a positive integer" });
+          return;
+        }
+        const candidates = job?.run ? [...job.run.artifacts, ...job.run.artifactHistory] : [];
+        const artifact = candidates.find((item) => item.kind === artifactMatch[2] && (requestedVersion === null || item.version === Number(requestedVersion)));
         if (!artifact || !inside(options.workspaceDir, artifact.path)) {
           sendJson(response, 404, { error: "Artifact not found" });
           return;
@@ -358,12 +478,7 @@ export function createInsightForgeServer(options: ServerOptions) {
         return;
       }
       if (method === "GET" && !url.pathname.startsWith("/api/")) {
-        const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-        const filePath = resolve(options.publicDir, requested);
-        if (!inside(options.publicDir, filePath)) {
-          sendJson(response, 404, { error: "Not found" });
-          return;
-        }
+        const filePath = staticFilePath(options.publicDir, url.pathname);
         try {
           const file = await readFile(filePath);
           response.writeHead(200, {
@@ -400,33 +515,33 @@ export function createInsightForgeServer(options: ServerOptions) {
         currentRun = undefined;
       }
       server = createServer((request, response) => void route(request, response));
+      const activeServer = server;
       await new Promise<void>((resolveListen, rejectListen) => {
-        server?.once("error", rejectListen);
-        server?.listen(port, host, () => resolveListen());
+        activeServer.once("error", rejectListen);
+        activeServer.listen(port, host, () => resolveListen());
       });
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Could not resolve server address");
-      return `http://${host}:${address.port}`;
+      return serverBaseUrl(host, activeServer.address());
     },
     async stop() {
       if (!server) return;
-      await new Promise<void>((resolveClose, rejectClose) => server?.close((error) => error ? rejectClose(error) : resolveClose()));
+      const activeServer = server;
+      await new Promise<void>((resolveClose, rejectClose) => activeServer.close((error) => settleServerClose(error, resolveClose, rejectClose)));
       server = undefined;
     },
   };
 }
 
-async function main() {
-  const root = process.cwd();
+export async function startDefaultServer(root = process.cwd(), port = Number(process.env.PORT ?? 4399), host = process.env.HOST ?? "127.0.0.1") {
   const app = createInsightForgeServer({
     fixtureDir: join(root, "fixtures", "golden"),
     publicDir: join(root, "public"),
     workspaceDir: join(root, ".insightforge"),
   });
-  const url = await app.start(Number(process.env.PORT ?? 4399), process.env.HOST ?? "127.0.0.1");
+  const url = await app.start(port, host);
   console.log(`InsightForge is running at ${url}`);
+  return { app, url };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void main();
+  void startDefaultServer();
 }

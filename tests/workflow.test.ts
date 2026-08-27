@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { runGoldenCase } from "../src/index.js";
 
-test("a new research task runs the five-state chain with four real tools", async () => {
+test("a new research task runs the five-state chain with real tools and validated model stages", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-workflow-"));
   const run = await runGoldenCase({
     researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
@@ -22,10 +22,16 @@ test("a new research task runs the five-state chain with four real tools", async
   assert.equal(run.terminalStatus, "NEEDS_REVIEW");
 
   const toolEvents = run.events.filter((event) => event.kind === "TOOL_CALL");
-  assert.deepEqual(
-    toolEvents.map((event) => event.toolName),
-    ["snapshot-search", "pdf-reader", "csv-calculator", "pptx-generator"],
-  );
+  assert.deepEqual(toolEvents.map((event) => event.toolName), [
+    "cached-model-planner",
+    "snapshot-search",
+    "pdf-reader",
+    "csv-calculator",
+    "cached-model-synthesizer",
+    "pptx-generator",
+  ]);
+  assert.equal(run.synthesisMode, "CACHED_MODEL_OUTPUT");
+  assert.equal(run.modelProvenance.synthesisSource, "CACHED_MODEL_OUTPUT");
   for (const event of toolEvents) {
     assert.equal(event.status, "success");
     assert.ok(event.inputSummary.length > 0);

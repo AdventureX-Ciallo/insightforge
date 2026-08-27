@@ -66,7 +66,7 @@ export interface UploadValidationResult {
 }
 
 function normalizeMimeType(value: string) {
-  return value.split(";", 1)[0]?.trim().toLowerCase() || "application/octet-stream";
+  return value.split(";", 1)[0]!.trim().toLowerCase() || "application/octet-stream";
 }
 
 function truncateUtf8(value: string, maxBytes: number) {
@@ -102,7 +102,6 @@ export function sanitizeUploadFileName(fileName: string) {
 
   const extensionBytes = Buffer.byteLength(extension, "utf8");
   safeStem = truncateUtf8(safeStem, MAX_SANITIZED_FILE_NAME_BYTES - extensionBytes).replace(/[. ]+$/gu, "");
-  if (!safeStem) safeStem = "upload";
   return `${safeStem}${extension}`;
 }
 

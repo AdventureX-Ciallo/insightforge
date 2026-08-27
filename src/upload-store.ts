@@ -49,7 +49,7 @@ interface UploadDirectories {
   recordsRoot: string;
 }
 
-function isPathInside(root: string, target: string, allowSame = false) {
+export function isPathInside(root: string, target: string, allowSame = false) {
   const rel = relative(resolve(root), resolve(target));
   if (rel === "") return allowSame;
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
@@ -100,7 +100,7 @@ export async function persistUpload(input: {
   originalFileName: string;
   declaredMimeType: string;
   bytes: Uint8Array;
-}): Promise<UploadRecord> {
+}, integrityVerifier: (path: string, record: UploadRecord) => Promise<boolean> = persistedUploadMatches): Promise<UploadRecord> {
   const directories = await ensureUploadDirectories(input.workspaceDir);
   const sanitizedFileName = sanitizeUploadFileName(input.originalFileName);
   const id = randomUUID();
@@ -142,8 +142,7 @@ export async function persistUpload(input: {
     await writeFile(temporaryPath, input.bytes, { flag: "wx", mode: 0o600 });
     await rename(temporaryPath, targetPath);
     fileCreated = true;
-    const fileInfo = await stat(targetPath);
-    if (!fileInfo.isFile() || fileInfo.size !== record.sizeBytes || await hashFile(targetPath) !== record.sha256) {
+    if (!await integrityVerifier(targetPath, record)) {
       throw new UploadStoreError(500, "Persisted upload failed byte verification");
     }
     await writeFile(temporaryRecordPath, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
@@ -158,7 +157,16 @@ export async function persistUpload(input: {
   }
 }
 
-export async function verifyPersistedUpload(workspaceDir: string, id: string): Promise<VerifiedUpload> {
+export async function persistedUploadMatches(path: string, record: Pick<UploadRecord, "sizeBytes" | "sha256">) {
+  const fileInfo = await stat(path);
+  return fileInfo.isFile() && fileInfo.size === record.sizeBytes && await hashFile(path) === record.sha256;
+}
+
+export async function verifyPersistedUpload(
+  workspaceDir: string,
+  id: string,
+  inspectFile: (targetPath: string, filesRoot: string, record: UploadRecord) => Promise<void> = inspectPersistedUpload,
+): Promise<VerifiedUpload> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id)) {
     throw new UploadValidationError(400, "Upload identifier is invalid");
   }
@@ -201,14 +209,7 @@ export async function verifyPersistedUpload(workspaceDir: string, id: string): P
   }
 
   try {
-    const linkInfo = await lstat(targetPath);
-    if (linkInfo.isSymbolicLink() || !linkInfo.isFile()) throw new UploadStoreError(409, "Stored upload is not a regular file");
-    const realTarget = await realpath(targetPath);
-    assertInside(directories.filesRoot, realTarget, "Stored upload resolves outside the upload directory");
-    const fileInfo = await stat(realTarget);
-    if (fileInfo.size !== record.sizeBytes || await hashFile(realTarget) !== record.sha256) {
-      throw new UploadStoreError(409, "Stored upload no longer matches its byte digest");
-    }
+    await inspectFile(targetPath, directories.filesRoot, record);
   } catch (error) {
     if (error instanceof UploadStoreError) throw error;
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
@@ -217,4 +218,15 @@ export async function verifyPersistedUpload(workspaceDir: string, id: string): P
   }
 
   return { ...record, persisted: true, hashMatches: true, verificationUrl: verificationUrl(record.id) };
+}
+
+async function inspectPersistedUpload(targetPath: string, filesRoot: string, record: UploadRecord) {
+  const linkInfo = await lstat(targetPath);
+  if (linkInfo.isSymbolicLink() || !linkInfo.isFile()) throw new UploadStoreError(409, "Stored upload is not a regular file");
+  const realTarget = await realpath(targetPath);
+  assertInside(filesRoot, realTarget, "Stored upload resolves outside the upload directory");
+  const fileInfo = await stat(realTarget);
+  if (fileInfo.size !== record.sizeBytes || await hashFile(realTarget) !== record.sha256) {
+    throw new UploadStoreError(409, "Stored upload no longer matches its byte digest");
+  }
 }

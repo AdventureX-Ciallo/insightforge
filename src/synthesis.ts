@@ -1,9 +1,21 @@
-import type { Claim, Conclusion, Datum, Evidence, ResearchSource } from "./domain.js";
+import type {
+  Assumption,
+  CandidateRevision,
+  Claim,
+  Conclusion,
+  Datum,
+  Evidence,
+  EvidenceGap,
+  ResearchSource,
+} from "./domain.js";
 
 export interface SynthesisBundle {
   data: Datum[];
+  assumptions: Assumption[];
   claims: Claim[];
+  evidenceGaps: EvidenceGap[];
   conclusions: Conclusion[];
+  candidateRevisions: CandidateRevision[];
 }
 
 export interface DeterministicSynthesisInputs {
@@ -26,7 +38,7 @@ const LATIN_OR_NUMBER = /[a-z0-9]+/gi;
 export function cjkBigrams(text: string): string[] {
   const chars = [...text].filter((ch) => CJK.test(ch));
   const grams: string[] = [];
-  for (let i = 0; i < chars.length - 1; i += 1) grams.push((chars[i] ?? "") + (chars[i + 1] ?? ""));
+  for (let i = 0; i < chars.length - 1; i += 1) grams.push(chars[i]! + chars[i + 1]!);
   return grams;
 }
 
@@ -76,8 +88,10 @@ export interface MismatchSynthesisInputs extends DeterministicSynthesisInputs {
 export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Datum[]): SynthesisBundle {
   const focus = inputs.question.replace(/[？?。!！\s]+/g, "").slice(0, 30) || "目标问题";
   const hint = inputs.sources.slice(0, 2).map((source) => `《${source.title}》`).join("、") || "既有资料";
-  const evidenceIds = inputs.evidence.map((item) => item.id);
-  const sourceIds = inputs.sources.map((item) => item.id);
+  // 失配材料不能为了“覆盖率”被伪造为支撑路径；只在 Claim 文本中说明已检查范围，
+  // 结论走独立 EvidenceGap 路径。
+  const evidenceIds: string[] = [];
+  const sourceIds: string[] = [];
 
   const sharedClaim = {
     type: "AI_JUDGMENT" as const,
@@ -85,6 +99,10 @@ export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Da
     datumIds: [],
     evidenceStatus: "INSUFFICIENT_EVIDENCE" as const,
     assumptions: [],
+    knowledgeType: "SOURCE_OPINION" as const,
+    originType: "DETERMINISTIC" as const,
+    freshness: "CURRENT" as const,
+    assumptionIds: [],
   };
 
   const claims: Claim[] = [
@@ -93,18 +111,21 @@ export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Da
       id: "claim-fit-sources",
       text: `已检视的 ${inputs.sources.length} 个信源（主题集中于「${hint}」）与「${focus}」不匹配，不能作为本问题的依据。`,
       originalText: `已检索 ${inputs.sources.length} 个信源。`,
+      evidenceGapId: "gap-fit-sources",
     },
     {
       ...sharedClaim,
       id: "claim-fit-data",
       text: "现有 CSV/PDF 资料中不包含与问题指标对应的时间序列，无法执行确定性计算或带假设的估算。",
       originalText: "已解析本地数据文件。",
+      evidenceGapId: "gap-fit-data",
     },
     {
       ...sharedClaim,
       id: "claim-fit-judgment",
       text: "在信源与数据补齐之前，针对该问题生成的任何行业判断都会缺少可追溯依据。",
       originalText: "可基于现有材料形成初步判断。",
+      evidenceGapId: "gap-fit-judgment",
     },
   ];
 
@@ -114,6 +135,10 @@ export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Da
     reviewStatus: "PENDING_REVIEW" as const,
     confirmedAt: null,
     confirmedText: null,
+    originType: "DETERMINISTIC" as const,
+    normalizedEvidenceStatus: "INSUFFICIENT_EVIDENCE" as const,
+    normalizedReviewStatus: "PENDING_REVIEW" as const,
+    freshness: "CURRENT" as const,
   };
 
   const conclusions: Conclusion[] = [
@@ -126,6 +151,8 @@ export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Da
       evidenceIds,
       evidenceStatus: "INSUFFICIENT_EVIDENCE",
       missingEvidence: [`与「${focus}」直接相关的一手信源（政府/协会/公司披露）`, "信源口径与统计范围说明"],
+      currentRevisionId: "revision-fit-sources",
+      evidenceGapIds: ["gap-fit-sources"],
     },
     {
       ...baseConclusion,
@@ -136,6 +163,8 @@ export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Da
       evidenceIds,
       evidenceStatus: "INSUFFICIENT_EVIDENCE",
       missingEvidence: ["目标指标的时间序列数据（CSV/XLSX）", "指标定义与单位说明"],
+      currentRevisionId: "revision-fit-data",
+      evidenceGapIds: ["gap-fit-data"],
     },
     {
       ...baseConclusion,
@@ -145,11 +174,44 @@ export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Da
       claimIds: ["claim-fit-judgment"],
       evidenceIds,
       evidenceStatus: "INSUFFICIENT_EVIDENCE",
-      missingEvidence: ["覆盖问题的量化证据", "可交叉验证的第二信源"],
+      missingEvidence: ["覆盖问题的量化证据", "可交叉验证的第二信源", "独立方法或样本的稳健性检验"],
+      currentRevisionId: "revision-fit-judgment",
+      evidenceGapIds: ["gap-fit-judgment"],
     },
   ];
 
-  return { data, claims, conclusions };
+  const createdAt = new Date().toISOString();
+  const evidenceGaps: EvidenceGap[] = conclusions.map((conclusion) => ({
+    id: conclusion.evidenceGapIds[0]!,
+    claimId: conclusion.claimIds[0]!,
+    existingEvidenceIds: [],
+    existingDatumIds: [],
+    missingItems: conclusion.missingEvidence.map((description, index) => ({
+      kind: index === 0 ? "SOURCE" : index === 1 ? "METRIC" : "CROSS_CHECK",
+      description,
+      requiredScope: focus,
+    })),
+    blockingReason: "本轮收集资料与研究问题不匹配，不能形成可追溯行业判断。",
+    blockedAction: "CONFIRM",
+    createdAt,
+    resolvedAt: null,
+    resolutionEvidenceIds: [],
+  }));
+  const candidateRevisions: CandidateRevision[] = conclusions.map((conclusion) => ({
+    id: conclusion.currentRevisionId,
+    conclusionId: conclusion.id,
+    parentRevisionId: null,
+    authorType: "SYSTEM",
+    originType: "DETERMINISTIC",
+    text: conclusion.text,
+    changeReason: "确定性问题失配阻断，不是行业结论",
+    createdAt,
+    auditStatus: "NEEDS_REVIEW",
+    auditFindingIds: [],
+    sourceSnapshotId: "mismatch-no-compatible-cache",
+    isCurrent: true,
+  }));
+  return { data, assumptions: [], claims, evidenceGaps, conclusions, candidateRevisions };
 }
 
 export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs): SynthesisBundle {
@@ -168,6 +230,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       formula: null,
       inputs: [],
       assumptions: ["来源采用乘用车国内零售口径，不含商用车与出口"],
+      knowledgeType: "FACT",
+      originType: "SOURCE_EXTRACTED",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      sourceIds: ["source-web-association"],
+      roundingRule: null,
     },
     {
       id: "datum-penetration",
@@ -182,6 +250,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
         ? [{ label: "新能源汽车预测销量", value: 11.5, unit: "百万辆" }, { label: "汽车预测总销量", value: 31, unit: "百万辆" }]
         : [{ label: "新能源汽车最终销量", value: 12.866, unit: "百万辆" }, { label: "汽车最终总销量", value: 31.436, unit: "百万辆" }],
       assumptions: [],
+      knowledgeType: "CALCULATION",
+      originType: "DETERMINISTIC",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      sourceIds: ["source-market-csv"],
+      roundingRule: "展示保留 1 位小数；内部保留 IEEE-754 计算值",
     },
     {
       id: "datum-charger-growth",
@@ -197,6 +271,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
         { label: "2023 公共充电桩", value: 2.726, unit: "百万台" },
       ],
       assumptions: [],
+      knowledgeType: "CALCULATION",
+      originType: "DETERMINISTIC",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      sourceIds: ["source-market-csv", "source-web-charging"],
+      roundingRule: "展示保留 1 位小数；内部保留 IEEE-754 计算值",
     },
     {
       id: "datum-adequacy-estimate",
@@ -209,6 +289,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       formula: "public_chargers_million * (1 - utilization_gap_assumption)",
       inputs: [{ label: "公共充电桩", value: 3.579, unit: "百万台" }, { label: "利用率折损", value: 15, unit: "%" }],
       assumptions: [],
+      knowledgeType: "ESTIMATE",
+      originType: "DETERMINISTIC",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      sourceIds: ["source-market-csv", "source-web-charging"],
+      roundingRule: "展示保留 2 位小数；内部保留 IEEE-754 计算值",
     },
   ];
 
@@ -222,6 +308,11 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       datumIds: ["datum-penetration", "datum-reported-penetration"],
       evidenceStatus: "SUPPORTED",
       assumptions: [],
+      knowledgeType: "CALCULATION",
+      originType: "DETERMINISTIC",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      evidenceGapId: null,
     },
     {
       id: "claim-charging",
@@ -232,6 +323,11 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       datumIds: ["datum-charger-growth", "datum-adequacy-estimate"],
       evidenceStatus: "SUPPORTED",
       assumptions: [],
+      knowledgeType: "ESTIMATE",
+      originType: "DETERMINISTIC",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      evidenceGapId: null,
     },
     {
       // 确定性抽取器把来源的预测句当作事实抽取；AUDIT 的 TYPE_MISMATCH 规则会基于原文标记纠正为 FORECAST。
@@ -243,6 +339,11 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       datumIds: [],
       evidenceStatus: "SUPPORTED",
       assumptions: [],
+      knowledgeType: "FORECAST",
+      originType: "SOURCE_EXTRACTED",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      evidenceGapId: null,
     },
     {
       id: "claim-profitability",
@@ -253,6 +354,11 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       datumIds: [],
       evidenceStatus: "SUPPORTED",
       assumptions: [],
+      knowledgeType: "SOURCE_OPINION",
+      originType: "AI_JUDGMENT",
+      freshness: "CURRENT",
+      assumptionIds: [],
+      evidenceGapId: "gap-profitability",
     },
   ];
 
@@ -272,6 +378,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       missingEvidence: [],
       confirmedAt: null,
       confirmedText: null,
+      originType: "AI_JUDGMENT",
+      normalizedEvidenceStatus: "SUPPORTED",
+      normalizedReviewStatus: "PENDING_REVIEW",
+      freshness: "CURRENT",
+      currentRevisionId: "revision-penetration",
+      evidenceGapIds: [],
     },
     {
       id: "conclusion-charging",
@@ -286,6 +398,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       missingEvidence: [],
       confirmedAt: null,
       confirmedText: null,
+      originType: "AI_JUDGMENT",
+      normalizedEvidenceStatus: "SUPPORTED",
+      normalizedReviewStatus: "PENDING_REVIEW",
+      freshness: "CURRENT",
+      currentRevisionId: "revision-charging",
+      evidenceGapIds: [],
     },
     {
       id: "conclusion-outlook",
@@ -300,6 +418,12 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       missingEvidence: [],
       confirmedAt: null,
       confirmedText: null,
+      originType: "AI_JUDGMENT",
+      normalizedEvidenceStatus: "SUPPORTED",
+      normalizedReviewStatus: "PENDING_REVIEW",
+      freshness: "CURRENT",
+      currentRevisionId: "revision-outlook",
+      evidenceGapIds: [],
     },
     {
       id: "conclusion-profitability",
@@ -314,10 +438,58 @@ export function buildDeterministicSynthesis(inputs: DeterministicSynthesisInputs
       missingEvidence: [],
       confirmedAt: null,
       confirmedText: null,
+      originType: "AI_JUDGMENT",
+      normalizedEvidenceStatus: "SUPPORTED",
+      normalizedReviewStatus: "PENDING_REVIEW",
+      freshness: "CURRENT",
+      currentRevisionId: "revision-profitability",
+      evidenceGapIds: ["gap-profitability"],
     },
   ];
 
-  return { data, claims, conclusions };
+  const createdAt = new Date().toISOString();
+  const assumptions: Assumption[] = [{
+    id: "assumption-utilization-gap",
+    text: "15% 利用率折损仅用于演示情景，不代表全国或地区实际利用率。",
+    value: 15,
+    unit: "%",
+    range: "0%–100%",
+    owner: "DEMO_PARAMETER",
+    evidenceStatus: "INSUFFICIENT_EVIDENCE",
+    sourceIds: [],
+    freshness: "CURRENT",
+  }];
+  const evidenceGaps: EvidenceGap[] = [{
+    id: "gap-profitability",
+    claimId: "claim-profitability",
+    existingEvidenceIds: ["evidence-pdf-page-2"],
+    existingDatumIds: [],
+    missingItems: [
+      { kind: "METRIC", description: "运营商收入、成本和盈利数据", requiredScope: "全国及地区/运营商分层" },
+      { kind: "METHOD", description: "能够区分基础设施扩张与其他因素的分析方法", requiredScope: "2023–2025" },
+      { kind: "CROSS_CHECK", description: "至少一个独立来源的交叉验证", requiredScope: null },
+    ],
+    blockingReason: "当前合成演示 PDF 明确不含盈利数据，不能支撑全称盈利判断。",
+    blockedAction: "CONFIRM",
+    createdAt,
+    resolvedAt: null,
+    resolutionEvidenceIds: [],
+  }];
+  const candidateRevisions: CandidateRevision[] = conclusions.map((conclusion) => ({
+    id: conclusion.currentRevisionId,
+    conclusionId: conclusion.id,
+    parentRevisionId: null,
+    authorType: "SYSTEM",
+    originType: "DETERMINISTIC",
+    text: conclusion.text,
+    changeReason: "历史确定性合成草稿（仅作为数据建模种子，不作为默认模型候选）",
+    createdAt,
+    auditStatus: "PENDING",
+    auditFindingIds: [],
+    sourceSnapshotId: sourceVersion,
+    isCurrent: true,
+  }));
+  return { data, assumptions, claims, evidenceGaps, conclusions, candidateRevisions };
 }
 
 export function bundleFromLlmDrafts(
@@ -326,11 +498,22 @@ export function bundleFromLlmDrafts(
 ): SynthesisBundle {
   const claims: Claim[] = [];
   const conclusions: Conclusion[] = [];
+  const assumptions: Assumption[] = [];
+  const evidenceGaps: EvidenceGap[] = [];
+  const candidateRevisions: CandidateRevision[] = [];
+  const createdAt = new Date().toISOString();
   drafts.forEach((draft, index) => {
     const claimId = `claim-llm-${index + 1}`;
     const conclusionId = `conclusion-llm-${index + 1}`;
+    const revisionId = `revision-llm-${index + 1}`;
+    const assumptionIds = draft.assumptions.map((text, assumptionIndex) => {
+      const id = `assumption-llm-${index + 1}-${assumptionIndex + 1}`;
+      assumptions.push({ id, text, value: null, unit: null, range: null, owner: "AI", evidenceStatus: "INSUFFICIENT_EVIDENCE", sourceIds: [], freshness: "CURRENT" });
+      return id;
+    });
     const datumIds = collected.data.filter((datum) => draft.evidenceIds.includes(datum.evidenceId)).map((datum) => datum.id);
     const evidenceStatus = draft.missingEvidence.length > 0 ? "INSUFFICIENT_EVIDENCE" as const : "SUPPORTED" as const;
+    const evidenceGapId = evidenceStatus === "INSUFFICIENT_EVIDENCE" ? `gap-llm-${index + 1}` : null;
     claims.push({
       id: claimId,
       text: draft.text,
@@ -340,6 +523,11 @@ export function bundleFromLlmDrafts(
       datumIds,
       evidenceStatus,
       assumptions: draft.assumptions,
+      knowledgeType: "SOURCE_OPINION",
+      originType: "AI_JUDGMENT",
+      freshness: "CURRENT",
+      assumptionIds,
+      evidenceGapId,
     });
     conclusions.push({
       id: conclusionId,
@@ -354,9 +542,167 @@ export function bundleFromLlmDrafts(
       missingEvidence: draft.missingEvidence,
       confirmedAt: null,
       confirmedText: null,
+      originType: "AI_JUDGMENT",
+      normalizedEvidenceStatus: evidenceStatus,
+      normalizedReviewStatus: "PENDING_REVIEW",
+      freshness: "CURRENT",
+      currentRevisionId: revisionId,
+      evidenceGapIds: evidenceGapId ? [evidenceGapId] : [],
+    });
+    if (evidenceGapId) {
+      evidenceGaps.push({
+        id: evidenceGapId,
+        claimId,
+        existingEvidenceIds: draft.evidenceIds,
+        existingDatumIds: datumIds,
+        missingItems: draft.missingEvidence.map((description) => ({ kind: "CROSS_CHECK", description, requiredScope: null })),
+        blockingReason: "模型候选明确声明证据缺口，程序阻止确认。",
+        blockedAction: "CONFIRM",
+        createdAt,
+        resolvedAt: null,
+        resolutionEvidenceIds: [],
+      });
+    }
+    candidateRevisions.push({
+      id: revisionId,
+      conclusionId,
+      parentRevisionId: null,
+      authorType: "AI",
+      originType: "AI_JUDGMENT",
+      text: draft.text,
+      changeReason: "实时单端点模型生成，经 Schema 与引用白名单校验",
+      createdAt,
+      auditStatus: "PENDING",
+      auditFindingIds: [],
+      sourceSnapshotId: "live-single-endpoint",
+      isCurrent: true,
     });
   });
-  return { data: collected.data, claims, conclusions };
+  return { data: collected.data, assumptions, claims, evidenceGaps, conclusions, candidateRevisions };
+}
+
+export interface CachedModelDraft {
+  role: "PENETRATION_CONFLICT" | "CHARGING_GROWTH" | "ADEQUACY_ESTIMATE" | "CAUSALITY_GAP";
+  text: string;
+  evidenceIds: string[];
+  assumptionIds: string[];
+  evidenceStatus: "SUPPORTED" | "CONFLICT" | "INSUFFICIENT_EVIDENCE";
+  missingEvidence: string[];
+}
+
+const MODEL_ROLE_CONTRACT: Record<CachedModelDraft["role"], {
+  claimId: string;
+  conclusionId: string;
+  revisionId: string;
+  datumIds: string[];
+  knowledgeType: Claim["knowledgeType"];
+}> = {
+  PENETRATION_CONFLICT: { claimId: "claim-penetration", conclusionId: "conclusion-penetration", revisionId: "revision-penetration", datumIds: ["datum-penetration", "datum-reported-penetration"], knowledgeType: "CALCULATION" },
+  CHARGING_GROWTH: { claimId: "claim-charging-growth", conclusionId: "conclusion-charging-growth", revisionId: "revision-charging-growth", datumIds: ["datum-charger-growth"], knowledgeType: "CALCULATION" },
+  ADEQUACY_ESTIMATE: { claimId: "claim-adequacy-estimate", conclusionId: "conclusion-adequacy-estimate", revisionId: "revision-adequacy-estimate", datumIds: ["datum-adequacy-estimate"], knowledgeType: "ESTIMATE" },
+  CAUSALITY_GAP: { claimId: "claim-causality-gap", conclusionId: "conclusion-causality-gap", revisionId: "revision-causality-gap", datumIds: [], knowledgeType: "SOURCE_OPINION" },
+};
+
+/**
+ * 将经过摘要、Schema、问题域、引用 ID 与假设 ID 校验的模型缓存接入证据图。
+ * ID 和关系由程序分配；模型只能提出文本和已知对象引用，不能自造图结构。
+ */
+export function bundleFromCachedModelDrafts(
+  drafts: CachedModelDraft[],
+  collected: { data: Datum[]; assumptions: Assumption[]; sources: ResearchSource[]; evidence: Evidence[] },
+  sourceSnapshotId: string,
+): SynthesisBundle {
+  const createdAt = new Date().toISOString();
+  const claims: Claim[] = [];
+  const conclusions: Conclusion[] = [];
+  const evidenceGaps: EvidenceGap[] = [];
+  const candidateRevisions: CandidateRevision[] = [];
+  for (const draft of drafts) {
+    const contract = MODEL_ROLE_CONTRACT[draft.role];
+    const datumIds = contract.datumIds.filter((id) => collected.data.some((datum) => datum.id === id));
+    const requiredNumbers = draft.role === "PENETRATION_CONFLICT"
+      ? ["datum-penetration", "datum-reported-penetration"]
+      : draft.role === "CHARGING_GROWTH"
+        ? ["datum-charger-growth"]
+        : draft.role === "ADEQUACY_ESTIMATE"
+          ? ["datum-adequacy-estimate"]
+          : [];
+    for (const datumId of requiredNumbers) {
+      const datum = collected.data.find((item) => item.id === datumId);
+      if (!datum) throw new Error(`Cached model role ${draft.role} requires missing datum ${datumId}`);
+      const rendered = datumId === "datum-adequacy-estimate" ? datum.value.toFixed(2) : datum.value.toFixed(1);
+      if (!draft.text.includes(rendered)) throw new Error(`Cached model role ${draft.role} is numerically inconsistent with ${datumId}`);
+    }
+    const evidenceGapId = draft.evidenceStatus === "INSUFFICIENT_EVIDENCE" ? `gap-${draft.role.toLowerCase().replaceAll("_", "-")}` : null;
+    claims.push({
+      id: contract.claimId,
+      text: draft.text,
+      originalText: draft.text,
+      type: "AI_JUDGMENT",
+      evidenceIds: draft.evidenceIds,
+      datumIds,
+      evidenceStatus: draft.evidenceStatus,
+      assumptions: draft.assumptionIds.map((id) => collected.assumptions.find((item) => item.id === id)?.text ?? id),
+      knowledgeType: contract.knowledgeType,
+      originType: "AI_JUDGMENT",
+      freshness: "CURRENT",
+      assumptionIds: draft.assumptionIds,
+      evidenceGapId,
+    });
+    conclusions.push({
+      id: contract.conclusionId,
+      text: draft.text,
+      originalAiText: draft.text,
+      type: "AI_JUDGMENT",
+      claimIds: [contract.claimId],
+      evidenceIds: draft.evidenceIds,
+      sourceIds: sourceIdsForEvidence(draft.evidenceIds, collected.sources, collected.evidence),
+      evidenceStatus: draft.evidenceStatus,
+      reviewStatus: "PENDING_REVIEW",
+      missingEvidence: draft.missingEvidence,
+      confirmedAt: null,
+      confirmedText: null,
+      originType: "AI_JUDGMENT",
+      normalizedEvidenceStatus: draft.evidenceStatus,
+      normalizedReviewStatus: "PENDING_REVIEW",
+      freshness: "CURRENT",
+      currentRevisionId: contract.revisionId,
+      evidenceGapIds: evidenceGapId ? [evidenceGapId] : [],
+    });
+    if (evidenceGapId) {
+      evidenceGaps.push({
+        id: evidenceGapId,
+        claimId: contract.claimId,
+        existingEvidenceIds: draft.evidenceIds,
+        existingDatumIds: datumIds,
+        missingItems: draft.missingEvidence.map((description, index) => ({
+          kind: index === 0 ? "METRIC" : index === 1 ? "SCOPE" : "METHOD",
+          description,
+          requiredScope: "中国新能源乘用车与公共充电基础设施",
+        })),
+        blockingReason: "现有描述性证据不足以支持单一因果约束判断。",
+        blockedAction: "CONFIRM",
+        createdAt,
+        resolvedAt: null,
+        resolutionEvidenceIds: [],
+      });
+    }
+    candidateRevisions.push({
+      id: contract.revisionId,
+      conclusionId: contract.conclusionId,
+      parentRevisionId: null,
+      authorType: "AI",
+      originType: "AI_JUDGMENT",
+      text: draft.text,
+      changeReason: "认证模型缓存输出，经完整性与证据引用合同校验",
+      createdAt,
+      auditStatus: "PENDING",
+      auditFindingIds: [],
+      sourceSnapshotId,
+      isCurrent: true,
+    });
+  }
+  return { data: collected.data, assumptions: collected.assumptions, claims, evidenceGaps, conclusions, candidateRevisions };
 }
 
 function sourceIdsForEvidence(evidenceIds: string[], sources: ResearchSource[], evidence: Evidence[]): string[] {

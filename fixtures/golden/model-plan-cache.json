@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "PLAN",
+  "researchQuestion": "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+  "generatedAt": "2026-08-27T06:30:00.000Z",
+  "provider": "Codex authenticated model task",
+  "model": "GPT-5 family",
+  "promptSha256": "4224a3c4c32a5c08919ac819f8d3a7183d6c9a6cfa28a845f3745555264a5571",
+  "steps": [
+    {
+      "objective": "检索与研究问题直接相关的协会、政府和行业联盟信源，并保留搜索结果的标题、URL、时间和摘录。",
+      "toolName": "snapshot-search",
+      "expectedOutput": "明确标记为缓存快照的候选信源列表"
+    },
+    {
+      "objective": "解析本地行业 PDF，按页保存正文、材料身份和提示词注入诱饵。",
+      "toolName": "pdf-reader",
+      "expectedOutput": "带文件名、页码和摘录的本地证据"
+    },
+    {
+      "objective": "读取结构化市场数据，重算渗透率、公共充电桩增长和带假设的情景估算。",
+      "toolName": "csv-calculator",
+      "expectedOutput": "公式、输入、单位、期间、行号和舍入规则"
+    },
+    {
+      "objective": "对模型候选执行引用、支撑、冲突、类型、假设和范围六类确定性审查。",
+      "toolName": "deterministic-audit",
+      "expectedOutput": "结构化审查结果、修正前后差异和最多一次自动动作"
+    },
+    {
+      "objective": "交付可下钻研究报告、五页可编辑 PPTX 和机器可读证据包。",
+      "toolName": "pptx-generator",
+      "expectedOutput": "共享同一研究快照和版本号的三个成果"
+    }
+  ]
+}

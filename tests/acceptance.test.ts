@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import JSZip from "jszip";
 
-import { evidencePackageSchema, runGoldenCase, type RunStep } from "../src/index.js";
+import { evidencePackageSchema, researchRunSchema, runGoldenCase, type RunStep } from "../src/index.js";
 
 async function golden(question = "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？") {
   return runGoldenCase({
@@ -48,6 +48,8 @@ test("every conclusion traces to locatable evidence and typed, reproducible data
   assert.equal(Number(((calculation.inputs[0].value / calculation.inputs[1].value) * 100).toFixed(10)), Number(calculation.value.toFixed(10)));
   const estimate = run.data.find((datum) => datum.id === "datum-adequacy-estimate");
   assert.ok(estimate?.assumptions.length);
+  assert.ok(run.conclusions.find((item) => item.id === "conclusion-penetration")?.text.includes(calculation.value.toFixed(1)));
+  assert.ok(run.conclusions.find((item) => item.id === "conclusion-adequacy-estimate")?.text.includes(estimate.value.toFixed(2)));
   assert.equal(run.conflicts[0]?.datumIds.length, 2);
   assert.ok(run.conclusions.some((item) => item.evidenceStatus === "INSUFFICIENT_EVIDENCE" && item.missingEvidence.length > 0));
 });
@@ -110,4 +112,11 @@ test("question changes alter the plan and synthesis, while a failed step cannot 
   assert.equal(lastProgress.find((step) => step.state === "COLLECT")?.status, "failed");
   assert.equal(lastProgress.find((step) => step.state === "DELIVER")?.status, "pending");
   assert.ok(!lastProgress.every((step) => step.status === "success"));
+});
+
+test("schema lock rejects a well-shaped run with a forged cross-object reference", async () => {
+  const run = await golden();
+  const forged = structuredClone(run);
+  forged.conclusions[0]!.evidenceIds = ["unknown-evidence-id"];
+  assert.throws(() => researchRunSchema.parse(forged), /unknown Evidence/);
 });

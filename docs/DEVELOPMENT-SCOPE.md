@@ -1,9 +1,9 @@
-# InsightForge 开发范围草案
+# InsightForge 开发范围
 
-- 文档状态：`DRAFT v1.3 — DEVELOPMENT PAUSED`
+- 文档状态：`ACTIVE v1.4 — BACKEND IN SCOPE, FRONTEND OWNED BY ABLOOM`
 - 补建日期：2026-08-27
 - 适用版本：基于 `2113f1091c4e5dbacc5b828013f0ff62514fbd9e` 的本地 MVP worktree
-- 说明：本文件在首轮原型后补建，用于修复此前缺少正式范围基线的流程缺陷；不能追溯声称它在开发开始前已经存在，也不能在项目所有者确认前称为冻结基线。
+- 说明：本文件在首轮原型后补建，不能追溯声称它在开发开始前已经存在。项目所有者随后明确授权继续完成除前端外的范围，本文件现作为当前实现与验收边界。
 
 ## 1. 产品结果
 

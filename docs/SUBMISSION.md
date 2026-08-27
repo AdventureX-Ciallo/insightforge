@@ -47,8 +47,8 @@ Single-team prototype. Development used test-first slices, external ChatGPT Pro 
 - Disaster PPTX: `demo-assets/insightforge-golden-fallback.pptx`
 - Microsoft PowerPoint evidence: `docs/assets/insightforge-office-valid.pptx`, `docs/assets/insightforge-office-edit-check.pptx`
 - Live authority-check evidence: `docs/assets/insightforge-live-check.png`
-- Source repository: https://github.com/AdventureX-Ciallo/insightforge
-- Required tag: `#shenicest-fission` (owner-approved release on the repository above)
+- Source repository: the existing GitHub repository after owner-approved commit/push
+- Required tag: `#shenicest-fission` after owner-approved release
 
 ## Future plan
 

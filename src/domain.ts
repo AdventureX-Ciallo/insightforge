@@ -12,13 +12,29 @@ export const contentTypes = [
   "HUMAN_CONFIRMED",
 ] as const;
 
+export const knowledgeTypes = ["FACT", "SOURCE_OPINION", "CALCULATION", "ESTIMATE", "FORECAST"] as const;
+export const originTypes = ["SOURCE_EXTRACTED", "DETERMINISTIC", "AI_JUDGMENT", "HUMAN_EDITED"] as const;
+export const normalizedEvidenceStatuses = ["SUPPORTED", "CONFLICT", "INSUFFICIENT_EVIDENCE"] as const;
+export const normalizedReviewStatuses = ["PENDING_REVIEW", "HUMAN_CONFIRMED", "HUMAN_REJECTED", "NEEDS_REVIEW"] as const;
+export const freshnessStatuses = ["CURRENT", "STALE"] as const;
+export const sourceDiscoveryModes = ["OFFLINE_SNAPSHOT", "LIVE_SINGLE_PROVIDER"] as const;
+export const authorityVerificationModes = ["NOT_RUN", "LIVE_ALLOWLIST"] as const;
+export const synthesisModes = ["CACHED_MODEL_OUTPUT", "LIVE_SINGLE_ENDPOINT", "DETERMINISTIC_MISMATCH_BLOCK"] as const;
+
 export type WorkflowState = (typeof workflowStates)[number];
 export type TerminalStatus = (typeof terminalStatuses)[number];
 export type ContentType = (typeof contentTypes)[number];
+export type KnowledgeType = (typeof knowledgeTypes)[number];
+export type OriginType = (typeof originTypes)[number];
+export type NormalizedEvidenceStatus = (typeof normalizedEvidenceStatuses)[number];
+export type NormalizedReviewStatus = (typeof normalizedReviewStatuses)[number];
+export type FreshnessStatus = (typeof freshnessStatuses)[number];
 export type StepStatus = "pending" | "running" | "success" | "failed";
 export type ReviewStatus = "PENDING_REVIEW" | "CONFIRMED" | "REJECTED" | "NEEDS_REVIEW";
 export type EvidenceStatus = "SUPPORTED" | "CONFLICT" | "INSUFFICIENT_EVIDENCE" | "STALE";
-export type SynthesisMode = "deterministic" | "deterministic-mismatch" | "llm-assisted";
+export type SourceDiscoveryMode = (typeof sourceDiscoveryModes)[number];
+export type AuthorityVerificationMode = (typeof authorityVerificationModes)[number];
+export type SynthesisMode = (typeof synthesisModes)[number];
 
 export interface RunStep {
   state: WorkflowState;
@@ -34,7 +50,18 @@ export interface RunStep {
 export interface ToolCallEvent {
   id: string;
   kind: "TOOL_CALL";
-  toolName: "snapshot-search" | "pdf-reader" | "csv-calculator" | "llm-planner" | "llm-synthesizer" | "pptx-generator";
+  toolName:
+    | "snapshot-search"
+    | "live-source-search"
+    | "authority-source-check"
+    | "pdf-reader"
+    | "local-file-reader"
+    | "csv-calculator"
+    | "cached-model-planner"
+    | "cached-model-synthesizer"
+    | "llm-planner"
+    | "llm-synthesizer"
+    | "pptx-generator";
   inputSummary: string;
   startedAt: string;
   status: "success" | "failed";
@@ -65,16 +92,51 @@ export interface SourceLocator {
   rows?: number[] | undefined;
 }
 
+export interface SourceConfidence {
+  category: "GOVERNMENT" | "ASSOCIATION" | "OFFICIAL" | "AUTHORITATIVE_EVENT" | "COMMUNITY" | "USER_UPLOAD" | "SYNTHETIC" | "OTHER";
+  authority: number;
+  freshness: number;
+  completeness: number;
+  overall: number;
+  rationale: string;
+  discountNote: string | null;
+}
+
+export interface CustomWhitelistSource {
+  uploadId: string;
+  originalFileName: string;
+  sha256: string;
+  parsedKind: "PDF" | "CSV" | "XLSX" | "TXT";
+  status: "PARSED";
+}
+
 export interface ResearchSource {
   id: string;
-  kind: "WEB" | "PDF" | "CSV";
+  kind: "WEB" | "PDF" | "CSV" | "XLSX" | "TXT";
   title: string;
   publisher: string;
-  version: "v1" | "v2" | "snapshot";
+  version: "v1" | "v2" | "snapshot" | "upload";
   locator: SourceLocator;
   capturedAt: string;
   excerpt: string;
   isOfflineSnapshot: boolean;
+  sourceVersionId: string;
+  materialRole: "AUTHORITY_SOURCE" | "CANDIDATE_SOURCE" | "SYNTHETIC_DEMO_MATERIAL" | "USER_UPLOAD";
+  freshness: FreshnessStatus;
+  confidence?: SourceConfidence;
+  customWhitelist?: CustomWhitelistSource | null;
+}
+
+export interface SourceVersion {
+  id: string;
+  sourceId: string;
+  version: "v1" | "v2" | "snapshot" | "upload";
+  capturedAt: string;
+  sha256: string;
+  locator: SourceLocator;
+  knowledgeType: KnowledgeType;
+  upstreamSourceIds: string[];
+  isCurrent: boolean;
 }
 
 export interface Evidence {
@@ -84,6 +146,9 @@ export interface Evidence {
   excerpt: string;
   locator: SourceLocator;
   datumIds: string[];
+  knowledgeType: KnowledgeType;
+  originType: OriginType;
+  freshness: FreshnessStatus;
 }
 
 export interface Datum {
@@ -97,6 +162,24 @@ export interface Datum {
   formula: string | null;
   inputs: Array<{ label: string; value: number; unit: string }>;
   assumptions: string[];
+  knowledgeType: KnowledgeType;
+  originType: OriginType;
+  freshness: FreshnessStatus;
+  assumptionIds: string[];
+  sourceIds: string[];
+  roundingRule: string | null;
+}
+
+export interface Assumption {
+  id: string;
+  text: string;
+  value: number | null;
+  unit: string | null;
+  range: string | null;
+  owner: "AI" | "HUMAN" | "DEMO_PARAMETER";
+  evidenceStatus: NormalizedEvidenceStatus;
+  sourceIds: string[];
+  freshness: FreshnessStatus;
 }
 
 export interface Claim {
@@ -108,6 +191,28 @@ export interface Claim {
   datumIds: string[];
   evidenceStatus: EvidenceStatus;
   assumptions: string[];
+  knowledgeType: KnowledgeType;
+  originType: OriginType;
+  freshness: FreshnessStatus;
+  assumptionIds: string[];
+  evidenceGapId: string | null;
+}
+
+export interface EvidenceGap {
+  id: string;
+  claimId: string;
+  existingEvidenceIds: string[];
+  existingDatumIds: string[];
+  missingItems: Array<{
+    kind: "SOURCE" | "METRIC" | "SCOPE" | "METHOD" | "CROSS_CHECK" | "ASSUMPTION";
+    description: string;
+    requiredScope: string | null;
+  }>;
+  blockingReason: string;
+  blockedAction: "CONFIRM";
+  createdAt: string;
+  resolvedAt: string | null;
+  resolutionEvidenceIds: string[];
 }
 
 export interface Conclusion {
@@ -123,6 +228,28 @@ export interface Conclusion {
   missingEvidence: string[];
   confirmedAt: string | null;
   confirmedText: string | null;
+  originType: OriginType;
+  normalizedEvidenceStatus: NormalizedEvidenceStatus;
+  normalizedReviewStatus: NormalizedReviewStatus;
+  freshness: FreshnessStatus;
+  currentRevisionId: string;
+  evidenceGapIds: string[];
+  confidenceDiscounts?: Array<{ sourceId: string; weight: number; explanation: string }>;
+}
+
+export interface CandidateRevision {
+  id: string;
+  conclusionId: string;
+  parentRevisionId: string | null;
+  authorType: "AI" | "HUMAN" | "SYSTEM";
+  originType: "AI_JUDGMENT" | "HUMAN_EDITED" | "DETERMINISTIC";
+  text: string;
+  changeReason: string;
+  createdAt: string;
+  auditStatus: "PENDING" | "PASSED" | "NEEDS_REVIEW";
+  auditFindingIds: string[];
+  sourceSnapshotId: string;
+  isCurrent: boolean;
 }
 
 export interface SourceConflict {
@@ -146,7 +273,7 @@ export interface AuditFinding {
   category: AuditCategory;
   severity: "info" | "warning" | "critical";
   targetId: string;
-  status: "OPEN" | "REPAIRED" | "NEEDS_HUMAN";
+  status: "PASSED" | "OPEN" | "REPAIRED" | "NEEDS_HUMAN";
   message: string;
   action: string;
   before: string;
@@ -160,14 +287,49 @@ export interface HumanDecision {
   decidedAt: string;
   previousText: string;
   resultingText: string;
+  candidateRevisionId: string;
+  decisionReason: string | null;
+  scopeNote: string | null;
+  invalidatedAt: string | null;
+  invalidationReason: string | null;
+  sourceUpdateId: string | null;
 }
 
 export interface ArtifactRecord {
   id: string;
-  kind: "PPTX" | "EVIDENCE_JSON" | "REPORT";
+  kind: "PPTX" | "EVIDENCE_JSON" | "REPORT_MD" | "REPORT_PDF";
   path: string;
   sha256: string;
   sizeBytes: number;
+  fileName: string;
+  version: number;
+}
+
+export interface ArtifactVersion {
+  id: string;
+  researchSnapshotId: string;
+  version: number;
+  createdAt: string;
+  trigger: "INITIAL_DELIVER" | "HUMAN_DECISION" | "HUMAN_EDIT" | "SOURCE_UPDATE";
+  triggerRef: string;
+  adjustmentNote: string;
+  artifactIds: string[];
+  sources: ResearchSource[];
+  evidence: Evidence[];
+  conclusions: Conclusion[];
+  status: "CURRENT" | "SUPERSEDED";
+  supersedesId: string | null;
+}
+
+export interface ModelProvenance {
+  planSource: "CACHED_MODEL_OUTPUT" | "LIVE_SINGLE_ENDPOINT" | "DETERMINISTIC_MISMATCH_BLOCK";
+  synthesisSource: "CACHED_MODEL_OUTPUT" | "LIVE_SINGLE_ENDPOINT" | "DETERMINISTIC_MISMATCH_BLOCK";
+  provider: string;
+  model: string;
+  generatedAt: string;
+  promptSha256: string;
+  outputSha256: string;
+  cacheFile: string | null;
 }
 
 export interface ResearchRun {
@@ -178,6 +340,8 @@ export interface ResearchRun {
   updatedAt: string;
   terminalStatus: TerminalStatus;
   synthesisMode: SynthesisMode;
+  sourceDiscoveryMode: SourceDiscoveryMode;
+  authorityVerificationMode: AuthorityVerificationMode;
   offlineMode: true;
   offlineModeLabel: "使用缓存快照";
   repairAttempts: number;
@@ -186,18 +350,27 @@ export interface ResearchRun {
   steps: RunStep[];
   events: ToolCallEvent[];
   sources: ResearchSource[];
+  sourceVersions: SourceVersion[];
   evidence: Evidence[];
   data: Datum[];
+  assumptions: Assumption[];
   claims: Claim[];
+  evidenceGaps: EvidenceGap[];
   conclusions: Conclusion[];
+  candidateRevisions: CandidateRevision[];
   conflicts: SourceConflict[];
   auditFindings: AuditFinding[];
   humanDecisions: HumanDecision[];
   artifacts: ArtifactRecord[];
+  artifactHistory: ArtifactRecord[];
+  artifactVersions: ArtifactVersion[];
   affectedObjectIds: string[];
+  researchSnapshotId: string;
+  uploadedFileIds: string[];
+  modelProvenance: ModelProvenance;
 }
 
-const sourceLocatorSchema = z.object({
+export const sourceLocatorSchema = z.object({
   url: z.string().url().optional(),
   fileName: z.string().min(1).optional(),
   page: z.number().int().positive().optional(),
@@ -205,30 +378,68 @@ const sourceLocatorSchema = z.object({
   cellRange: z.string().min(1).optional(),
   columns: z.array(z.string()).optional(),
   rows: z.array(z.number().int().positive()).optional(),
-});
+}).strict();
 
-const sourceSchema = z.object({
+export const sourceConfidenceSchema = z.object({
+  category: z.enum(["GOVERNMENT", "ASSOCIATION", "OFFICIAL", "AUTHORITATIVE_EVENT", "COMMUNITY", "USER_UPLOAD", "SYNTHETIC", "OTHER"]),
+  authority: z.number().min(0).max(1),
+  freshness: z.number().min(0).max(1),
+  completeness: z.number().min(0).max(1),
+  overall: z.number().min(0).max(1),
+  rationale: z.string().min(1),
+  discountNote: z.string().min(1).nullable(),
+}).strict();
+
+export const customWhitelistSourceSchema = z.object({
+  uploadId: z.string().min(1),
+  originalFileName: z.string().min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  parsedKind: z.enum(["PDF", "CSV", "XLSX", "TXT"]),
+  status: z.literal("PARSED"),
+}).strict();
+
+export const sourceSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["WEB", "PDF", "CSV"]),
+  kind: z.enum(["WEB", "PDF", "CSV", "XLSX", "TXT"]),
   title: z.string().min(1),
   publisher: z.string().min(1),
-  version: z.enum(["v1", "v2", "snapshot"]),
+  version: z.enum(["v1", "v2", "snapshot", "upload"]),
   locator: sourceLocatorSchema,
   capturedAt: z.string().min(1),
   excerpt: z.string(),
   isOfflineSnapshot: z.boolean(),
-});
+  sourceVersionId: z.string().min(1),
+  materialRole: z.enum(["AUTHORITY_SOURCE", "CANDIDATE_SOURCE", "SYNTHETIC_DEMO_MATERIAL", "USER_UPLOAD"]),
+  freshness: z.enum(freshnessStatuses),
+  confidence: sourceConfidenceSchema,
+  customWhitelist: customWhitelistSourceSchema.nullable(),
+}).strict();
 
-const evidenceSchema = z.object({
+export const sourceVersionSchema = z.object({
+  id: z.string().min(1),
+  sourceId: z.string().min(1),
+  version: z.enum(["v1", "v2", "snapshot", "upload"]),
+  capturedAt: z.string().min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  locator: sourceLocatorSchema,
+  knowledgeType: z.enum(knowledgeTypes),
+  upstreamSourceIds: z.array(z.string()),
+  isCurrent: z.boolean(),
+}).strict();
+
+export const evidenceSchema = z.object({
   id: z.string().min(1),
   sourceId: z.string().min(1),
   type: z.enum(contentTypes),
   excerpt: z.string(),
   locator: sourceLocatorSchema,
   datumIds: z.array(z.string()),
-});
+  knowledgeType: z.enum(knowledgeTypes),
+  originType: z.enum(originTypes),
+  freshness: z.enum(freshnessStatuses),
+}).strict();
 
-const datumSchema = z.object({
+export const datumSchema = z.object({
   id: z.string().min(1),
   evidenceId: z.string().min(1),
   metric: z.string().min(1),
@@ -239,9 +450,27 @@ const datumSchema = z.object({
   formula: z.string().nullable(),
   inputs: z.array(z.object({ label: z.string(), value: z.number().finite(), unit: z.string() })),
   assumptions: z.array(z.string()),
-});
+  knowledgeType: z.enum(knowledgeTypes),
+  originType: z.enum(originTypes),
+  freshness: z.enum(freshnessStatuses),
+  assumptionIds: z.array(z.string()),
+  sourceIds: z.array(z.string()),
+  roundingRule: z.string().nullable(),
+}).strict();
 
-const claimSchema = z.object({
+export const assumptionSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().min(1),
+  value: z.number().finite().nullable(),
+  unit: z.string().nullable(),
+  range: z.string().nullable(),
+  owner: z.enum(["AI", "HUMAN", "DEMO_PARAMETER"]),
+  evidenceStatus: z.enum(normalizedEvidenceStatuses),
+  sourceIds: z.array(z.string()),
+  freshness: z.enum(freshnessStatuses),
+}).strict();
+
+export const claimSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
   originalText: z.string().min(1),
@@ -250,43 +479,97 @@ const claimSchema = z.object({
   datumIds: z.array(z.string()),
   evidenceStatus: z.enum(["SUPPORTED", "CONFLICT", "INSUFFICIENT_EVIDENCE", "STALE"]),
   assumptions: z.array(z.string()),
-});
+  knowledgeType: z.enum(knowledgeTypes),
+  originType: z.enum(originTypes),
+  freshness: z.enum(freshnessStatuses),
+  assumptionIds: z.array(z.string()),
+  evidenceGapId: z.string().nullable(),
+}).strict();
 
-const conclusionSchema = z.object({
+export const evidenceGapSchema = z.object({
+  id: z.string().min(1),
+  claimId: z.string().min(1),
+  existingEvidenceIds: z.array(z.string()),
+  existingDatumIds: z.array(z.string()),
+  missingItems: z.array(z.object({
+    kind: z.enum(["SOURCE", "METRIC", "SCOPE", "METHOD", "CROSS_CHECK", "ASSUMPTION"]),
+    description: z.string().min(1),
+    requiredScope: z.string().nullable(),
+  }).strict()).min(1),
+  blockingReason: z.string().min(1),
+  blockedAction: z.literal("CONFIRM"),
+  createdAt: z.string().min(1),
+  resolvedAt: z.string().nullable(),
+  resolutionEvidenceIds: z.array(z.string()),
+}).strict();
+
+export const conclusionSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
   originalAiText: z.string().min(1),
   type: z.enum(["AI_JUDGMENT", "HUMAN_CONFIRMED"]),
   claimIds: z.array(z.string()).min(1),
-  evidenceIds: z.array(z.string()).min(1),
-  sourceIds: z.array(z.string()).min(1),
+  evidenceIds: z.array(z.string()),
+  sourceIds: z.array(z.string()),
   evidenceStatus: z.enum(["SUPPORTED", "CONFLICT", "INSUFFICIENT_EVIDENCE", "STALE"]),
   reviewStatus: z.enum(["PENDING_REVIEW", "CONFIRMED", "REJECTED", "NEEDS_REVIEW"]),
   missingEvidence: z.array(z.string()),
   confirmedAt: z.string().nullable(),
   confirmedText: z.string().nullable(),
-});
+  originType: z.enum(originTypes),
+  normalizedEvidenceStatus: z.enum(normalizedEvidenceStatuses),
+  normalizedReviewStatus: z.enum(normalizedReviewStatuses),
+  freshness: z.enum(freshnessStatuses),
+  currentRevisionId: z.string().min(1),
+  evidenceGapIds: z.array(z.string()),
+  confidenceDiscounts: z.array(z.object({
+    sourceId: z.string().min(1),
+    weight: z.number().min(0).max(1),
+    explanation: z.string().min(1),
+  }).strict()),
+}).strict();
+
+export const candidateRevisionSchema = z.object({
+  id: z.string().min(1),
+  conclusionId: z.string().min(1),
+  parentRevisionId: z.string().nullable(),
+  authorType: z.enum(["AI", "HUMAN", "SYSTEM"]),
+  originType: z.enum(["AI_JUDGMENT", "HUMAN_EDITED", "DETERMINISTIC"]),
+  text: z.string().min(1),
+  changeReason: z.string().min(1),
+  createdAt: z.string().min(1),
+  auditStatus: z.enum(["PENDING", "PASSED", "NEEDS_REVIEW"]),
+  auditFindingIds: z.array(z.string()),
+  sourceSnapshotId: z.string().min(1),
+  isCurrent: z.boolean(),
+}).strict();
 
 const auditFindingSchema = z.object({
   id: z.string().min(1),
   category: z.enum(["MISSING_CITATION", "UNSUPPORTED_CLAIM", "SOURCE_CONFLICT", "TYPE_MISMATCH", "MISSING_ASSUMPTION", "SCOPE_OVERREACH"]),
   severity: z.enum(["info", "warning", "critical"]),
   targetId: z.string().min(1),
-  status: z.enum(["OPEN", "REPAIRED", "NEEDS_HUMAN"]),
+  status: z.enum(["PASSED", "OPEN", "REPAIRED", "NEEDS_HUMAN"]),
   message: z.string().min(1),
   action: z.string().min(1),
   before: z.string(),
   after: z.string(),
 });
 
-const humanDecisionSchema = z.object({
+export const humanDecisionSchema = z.object({
   id: z.string().min(1),
   conclusionId: z.string().min(1),
   action: z.enum(["CONFIRM", "REJECT", "EDIT", "REVOKE_ON_SOURCE_UPDATE"]),
   decidedAt: z.string().min(1),
   previousText: z.string(),
   resultingText: z.string(),
-});
+  candidateRevisionId: z.string().min(1),
+  decisionReason: z.string().nullable(),
+  scopeNote: z.string().nullable(),
+  invalidatedAt: z.string().nullable(),
+  invalidationReason: z.string().nullable(),
+  sourceUpdateId: z.string().nullable(),
+}).strict();
 
 const runStepSchema = z.object({
   state: z.enum(workflowStates),
@@ -302,7 +585,7 @@ const runStepSchema = z.object({
 const toolCallEventSchema = z.object({
   id: z.string().min(1),
   kind: z.literal("TOOL_CALL"),
-  toolName: z.enum(["snapshot-search", "pdf-reader", "csv-calculator", "llm-planner", "llm-synthesizer", "pptx-generator"]),
+  toolName: z.enum(["snapshot-search", "live-source-search", "authority-source-check", "pdf-reader", "local-file-reader", "csv-calculator", "cached-model-planner", "cached-model-synthesizer", "llm-planner", "llm-synthesizer", "pptx-generator"]),
   inputSummary: z.string().min(1),
   startedAt: z.string().min(1),
   status: z.enum(["success", "failed"]),
@@ -318,7 +601,7 @@ const researchPlanSchema = z.object({
   steps: z.array(z.object({
     id: z.string().min(1),
     objective: z.string().min(1),
-    toolName: z.enum(["snapshot-search", "pdf-reader", "csv-calculator", "llm-synthesizer", "pptx-generator", "deterministic-audit"]),
+    toolName: z.enum(["snapshot-search", "live-source-search", "authority-source-check", "pdf-reader", "local-file-reader", "csv-calculator", "cached-model-planner", "cached-model-synthesizer", "llm-planner", "llm-synthesizer", "pptx-generator", "deterministic-audit"]),
     expectedOutput: z.string().min(1),
   }).strict()).min(1),
 }).strict();
@@ -331,39 +614,79 @@ const sourceConflictSchema = z.object({
   explanationStatus: z.literal("CANDIDATE_EXPLANATION"),
 }).strict();
 
-const artifactRecordSchema = z.object({
+export const artifactRecordSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["PPTX", "EVIDENCE_JSON", "REPORT"]),
+  kind: z.enum(["PPTX", "EVIDENCE_JSON", "REPORT_MD", "REPORT_PDF"]),
   path: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   sizeBytes: z.number().int().positive(),
+  fileName: z.string().min(1),
+  version: z.number().int().positive(),
+}).strict();
+
+export const artifactVersionSchema = z.object({
+  id: z.string().min(1),
+  researchSnapshotId: z.string().min(1),
+  version: z.number().int().positive(),
+  createdAt: z.string().min(1),
+  trigger: z.enum(["INITIAL_DELIVER", "HUMAN_DECISION", "HUMAN_EDIT", "SOURCE_UPDATE"]),
+  triggerRef: z.string().min(1),
+  adjustmentNote: z.string().min(1),
+  artifactIds: z.array(z.string()).min(1),
+  sources: z.array(sourceSchema).min(1),
+  evidence: z.array(evidenceSchema).min(1),
+  conclusions: z.array(conclusionSchema).min(3).max(5),
+  status: z.enum(["CURRENT", "SUPERSEDED"]),
+  supersedesId: z.string().nullable(),
+}).strict();
+
+export const modelProvenanceSchema = z.object({
+  planSource: z.enum(synthesisModes),
+  synthesisSource: z.enum(synthesisModes),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  generatedAt: z.string().min(1),
+  promptSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  outputSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  cacheFile: z.string().nullable(),
 }).strict();
 
 export const evidencePackageSchema = z.object({
   schemaVersion: z.literal("1.0"),
   researchQuestion: z.string().min(3),
-  synthesisMode: z.enum(["deterministic", "deterministic-mismatch", "llm-assisted"]),
+  synthesisMode: z.enum(synthesisModes),
+  sourceDiscoveryMode: z.enum(sourceDiscoveryModes),
+  authorityVerificationMode: z.enum(authorityVerificationModes),
   sources: z.array(sourceSchema).min(1),
+  sourceVersions: z.array(sourceVersionSchema).min(1),
   evidence: z.array(evidenceSchema).min(1),
   data: z.array(datumSchema).min(1),
+  assumptions: z.array(assumptionSchema),
   claims: z.array(claimSchema).min(1),
+  evidenceGaps: z.array(evidenceGapSchema),
   conclusions: z.array(conclusionSchema).min(3).max(5),
+  candidateRevisions: z.array(candidateRevisionSchema).min(3),
   auditFindings: z.array(auditFindingSchema),
   humanDecisions: z.array(humanDecisionSchema),
+  artifactVersions: z.array(artifactVersionSchema),
+  researchSnapshotId: z.string().min(1),
+  modelProvenance: modelProvenanceSchema,
   artifacts: z.array(z.object({
-    kind: z.enum(["PPTX", "EVIDENCE_JSON", "REPORT"]),
+    kind: z.enum(["PPTX", "EVIDENCE_JSON", "REPORT_MD", "REPORT_PDF"]),
     fileName: z.string().min(1),
   })),
-});
+}).strict();
 
-export const researchRunSchema: z.ZodType<ResearchRun> = z.object({
+const researchRunObjectSchema = z.object({
   schemaVersion: z.literal("1.0"),
   id: z.string().min(1),
   researchQuestion: z.string().min(3),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
   terminalStatus: z.enum(terminalStatuses),
-  synthesisMode: z.enum(["deterministic", "deterministic-mismatch", "llm-assisted"]),
+  synthesisMode: z.enum(synthesisModes),
+  sourceDiscoveryMode: z.enum(sourceDiscoveryModes),
+  authorityVerificationMode: z.enum(authorityVerificationModes),
   offlineMode: z.literal(true),
   offlineModeLabel: z.literal("使用缓存快照"),
   repairAttempts: z.number().int().min(0).max(1),
@@ -372,13 +695,113 @@ export const researchRunSchema: z.ZodType<ResearchRun> = z.object({
   steps: z.array(runStepSchema).length(5),
   events: z.array(toolCallEventSchema),
   sources: z.array(sourceSchema).min(1),
+  sourceVersions: z.array(sourceVersionSchema).min(1),
   evidence: z.array(evidenceSchema).min(1),
   data: z.array(datumSchema).min(1),
+  assumptions: z.array(assumptionSchema),
   claims: z.array(claimSchema).min(1),
+  evidenceGaps: z.array(evidenceGapSchema),
   conclusions: z.array(conclusionSchema).min(3).max(5),
+  candidateRevisions: z.array(candidateRevisionSchema).min(3),
   conflicts: z.array(sourceConflictSchema),
   auditFindings: z.array(auditFindingSchema),
   humanDecisions: z.array(humanDecisionSchema),
   artifacts: z.array(artifactRecordSchema),
+  artifactHistory: z.array(artifactRecordSchema),
+  artifactVersions: z.array(artifactVersionSchema),
   affectedObjectIds: z.array(z.string()),
+  researchSnapshotId: z.string().min(1),
+  uploadedFileIds: z.array(z.string()),
+  modelProvenance: modelProvenanceSchema,
 }).strict();
+
+function ids<T extends { id: string }>(items: T[]) {
+  return new Set(items.map((item) => item.id));
+}
+
+function graphIssue(ctx: z.RefinementCtx, path: Array<string | number>, message: string) {
+  ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
+}
+
+/** Schema 锁不只验证字段形状，也验证证据图引用、人工边界与当前版本唯一性。 */
+export const researchRunSchema: z.ZodType<ResearchRun> = researchRunObjectSchema.superRefine((run, ctx) => {
+  const collections: Array<[string, Array<{ id: string }>]> = [
+    ["sources", run.sources], ["sourceVersions", run.sourceVersions], ["evidence", run.evidence], ["data", run.data],
+    ["assumptions", run.assumptions], ["claims", run.claims], ["evidenceGaps", run.evidenceGaps],
+    ["conclusions", run.conclusions], ["candidateRevisions", run.candidateRevisions], ["artifacts", [...run.artifacts, ...run.artifactHistory]],
+    ["artifactVersions", run.artifactVersions],
+  ];
+  for (const [name, items] of collections) {
+    if (ids(items).size !== items.length) graphIssue(ctx, [name], `${name} contains duplicate IDs`);
+  }
+  const sourceIds = ids(run.sources);
+  const sourceVersionIds = ids(run.sourceVersions);
+  const evidenceIds = ids(run.evidence);
+  const datumIds = ids(run.data);
+  const assumptionIds = ids(run.assumptions);
+  const claimIds = ids(run.claims);
+  const gapIds = ids(run.evidenceGaps);
+  const conclusionIds = ids(run.conclusions);
+  const revisionIds = ids(run.candidateRevisions);
+  const artifactIds = ids([...run.artifacts, ...run.artifactHistory]);
+
+  run.sources.forEach((source, index) => {
+    if (!sourceVersionIds.has(source.sourceVersionId)) graphIssue(ctx, ["sources", index, "sourceVersionId"], "Source points to an unknown SourceVersion");
+  });
+  run.sourceVersions.forEach((version, index) => {
+    if (!sourceIds.has(version.sourceId)) graphIssue(ctx, ["sourceVersions", index, "sourceId"], "SourceVersion points to an unknown Source");
+  });
+  for (const source of run.sources) {
+    if (run.sourceVersions.filter((version) => version.sourceId === source.id && version.isCurrent).length !== 1) {
+      graphIssue(ctx, ["sourceVersions"], `Source ${source.id} must have exactly one current version`);
+    }
+  }
+  run.evidence.forEach((item, index) => {
+    if (!sourceIds.has(item.sourceId)) graphIssue(ctx, ["evidence", index, "sourceId"], "Evidence points to an unknown Source");
+    for (const id of item.datumIds) if (!datumIds.has(id)) graphIssue(ctx, ["evidence", index, "datumIds"], `Evidence points to unknown Datum ${id}`);
+  });
+  run.data.forEach((datum, index) => {
+    if (!evidenceIds.has(datum.evidenceId)) graphIssue(ctx, ["data", index, "evidenceId"], "Datum points to unknown Evidence");
+    for (const id of datum.assumptionIds) if (!assumptionIds.has(id)) graphIssue(ctx, ["data", index, "assumptionIds"], `Datum points to unknown Assumption ${id}`);
+    for (const id of datum.sourceIds) if (!sourceIds.has(id)) graphIssue(ctx, ["data", index, "sourceIds"], `Datum points to unknown Source ${id}`);
+  });
+  run.claims.forEach((claim, index) => {
+    for (const id of claim.evidenceIds) if (!evidenceIds.has(id)) graphIssue(ctx, ["claims", index, "evidenceIds"], `Claim points to unknown Evidence ${id}`);
+    for (const id of claim.datumIds) if (!datumIds.has(id)) graphIssue(ctx, ["claims", index, "datumIds"], `Claim points to unknown Datum ${id}`);
+    for (const id of claim.assumptionIds) if (!assumptionIds.has(id)) graphIssue(ctx, ["claims", index, "assumptionIds"], `Claim points to unknown Assumption ${id}`);
+    if (claim.evidenceGapId && !gapIds.has(claim.evidenceGapId)) graphIssue(ctx, ["claims", index, "evidenceGapId"], "Claim points to unknown EvidenceGap");
+  });
+  run.evidenceGaps.forEach((gap, index) => {
+    if (!claimIds.has(gap.claimId)) graphIssue(ctx, ["evidenceGaps", index, "claimId"], "EvidenceGap points to unknown Claim");
+    for (const id of gap.existingEvidenceIds) if (!evidenceIds.has(id)) graphIssue(ctx, ["evidenceGaps", index, "existingEvidenceIds"], `EvidenceGap points to unknown Evidence ${id}`);
+    for (const id of gap.existingDatumIds) if (!datumIds.has(id)) graphIssue(ctx, ["evidenceGaps", index, "existingDatumIds"], `EvidenceGap points to unknown Datum ${id}`);
+  });
+  run.conclusions.forEach((conclusion, index) => {
+    for (const id of conclusion.claimIds) if (!claimIds.has(id)) graphIssue(ctx, ["conclusions", index, "claimIds"], `Conclusion points to unknown Claim ${id}`);
+    for (const id of conclusion.evidenceIds) if (!evidenceIds.has(id)) graphIssue(ctx, ["conclusions", index, "evidenceIds"], `Conclusion points to unknown Evidence ${id}`);
+    for (const id of conclusion.sourceIds) if (!sourceIds.has(id)) graphIssue(ctx, ["conclusions", index, "sourceIds"], `Conclusion points to unknown Source ${id}`);
+    for (const id of conclusion.evidenceGapIds) if (!gapIds.has(id)) graphIssue(ctx, ["conclusions", index, "evidenceGapIds"], `Conclusion points to unknown EvidenceGap ${id}`);
+    for (const discount of conclusion.confidenceDiscounts as NonNullable<typeof conclusion.confidenceDiscounts>) {
+      if (!conclusion.sourceIds.includes(discount.sourceId)) graphIssue(ctx, ["conclusions", index, "confidenceDiscounts"], `Confidence discount points to unrelated Source ${discount.sourceId}`);
+    }
+    if (!revisionIds.has(conclusion.currentRevisionId)) graphIssue(ctx, ["conclusions", index, "currentRevisionId"], "Conclusion points to unknown CandidateRevision");
+    if (conclusion.normalizedEvidenceStatus === "INSUFFICIENT_EVIDENCE" && conclusion.evidenceGapIds.length === 0) graphIssue(ctx, ["conclusions", index, "evidenceGapIds"], "Insufficient conclusion requires an EvidenceGap");
+    if (conclusion.normalizedEvidenceStatus === "INSUFFICIENT_EVIDENCE" && conclusion.normalizedReviewStatus === "HUMAN_CONFIRMED") graphIssue(ctx, ["conclusions", index], "Insufficient conclusion cannot be human-confirmed");
+    if (conclusion.normalizedReviewStatus === "HUMAN_CONFIRMED" && (conclusion.type !== "HUMAN_CONFIRMED" || !conclusion.confirmedAt || !conclusion.confirmedText)) graphIssue(ctx, ["conclusions", index], "Confirmed conclusion lacks confirmation metadata");
+  });
+  run.candidateRevisions.forEach((revision, index) => {
+    if (!conclusionIds.has(revision.conclusionId)) graphIssue(ctx, ["candidateRevisions", index, "conclusionId"], "CandidateRevision points to unknown Conclusion");
+    if (revision.parentRevisionId && !revisionIds.has(revision.parentRevisionId)) graphIssue(ctx, ["candidateRevisions", index, "parentRevisionId"], "CandidateRevision points to unknown parent");
+  });
+  for (const conclusion of run.conclusions) {
+    if (run.candidateRevisions.filter((revision) => revision.conclusionId === conclusion.id && revision.isCurrent).length !== 1) graphIssue(ctx, ["candidateRevisions"], `Conclusion ${conclusion.id} must have exactly one current revision`);
+  }
+  run.humanDecisions.forEach((decision, index) => {
+    if (!conclusionIds.has(decision.conclusionId)) graphIssue(ctx, ["humanDecisions", index, "conclusionId"], "HumanDecision points to unknown Conclusion");
+    if (!revisionIds.has(decision.candidateRevisionId)) graphIssue(ctx, ["humanDecisions", index, "candidateRevisionId"], "HumanDecision points to unknown CandidateRevision");
+  });
+  run.artifactVersions.forEach((version, index) => {
+    for (const id of version.artifactIds) if (!artifactIds.has(id)) graphIssue(ctx, ["artifactVersions", index, "artifactIds"], `ArtifactVersion points to unknown Artifact ${id}`);
+  });
+  if (run.artifactVersions.length > 0 && run.artifactVersions.filter((item) => item.status === "CURRENT").length !== 1) graphIssue(ctx, ["artifactVersions"], "Exactly one ArtifactVersion must be current");
+});

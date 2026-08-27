@@ -1,90 +1,72 @@
-# Verification evidence
+# 验证证据索引
 
-> Status: `HISTORICAL EVIDENCE INDEX — NOT A CURRENT PASS CLAIM`.
+> 状态：`CURRENT — 2026-08-28`。所有结论按“真实成功、真实失败、环境未具备”分开记录。
 
-This record separates source facts, local engineering evidence and unavailable environments. All timestamps are from 2026-08-27 unless noted.
+## 基线与变更边界
 
-## Public-source fixtures and live integrity check
+- 基线 commit：`2113f1091c4e5dbacc5b828013f0ff62514fbd9e`。
+- 当前是本地隔离 worktree，保留已有脏改动。
+- 未 commit、push、创建 PR、打 Tag、部署、迁移数据库、修改线上配置或操作真实用户数据。
+- 本轮不修改 ABloom 负责的 `public/`。
 
-The offline golden case no longer uses `example.org` or invented publishers. It retains excerpts and values from these public pages:
+## 自动门禁
 
-- CAAM 2024 forecast: <https://www.caam.org.cn/chn/1/cate_3/con_5236311.html>
-- State Council client relay of CAAM 2024 final: <https://app.www.gov.cn/govdata/gov/202501/14/523622/article.html>
-- CADA/CPCA 2024 passenger-market report: <https://www.cada.cn/Trends/info_91_10118.html>
-- EVCIPA 2024 charging infrastructure: <https://www.evcipa.org.cn/newsinfo/8137834.html>
-
-Independent web retrieval confirmed the values used by the golden case: CAAM's 2024 forecast of 31.00 million total vehicles and 11.50 million NEVs; the State Council client relay of CAAM's 12.866 million final NEV sales and 40.9% all-auto share; CADA/CPCA's 10.899 million passenger-retail NEVs and 47.6% retail penetration plus the 2025 forecast of 13.30 million/57%; and EVCIPA's 3.579 million public chargers at 2024 year-end (with 2.726 million for 2023 corroborated by the alliance's historical release). Thus the fixtures are curated, source-linked offline snapshots; they are not invented market numbers. Derived judgments still remain candidates subject to scope and human review.
-
-Fixture hashes:
-
-| File | SHA-256 |
-|---|---|
-| `fixtures/golden/search-index.json` | `11c68015b7dd063803d1608e0c3181b0ab4afa6c93ed23f42564c5d28c0faac1` |
-| `fixtures/golden/market_v1.csv` | `372121cd994bc6f3b2ebae00b58ba92710743094d12ee3904567960a9ab646b0` |
-| `fixtures/golden/market_v2.csv` | `f4bcdb29c2371188126963966d4d483a2d8d32ca8b2190e2c519bf4b75e4fe5d` |
-| `fixtures/golden/market-brief.pdf` | `0818565f1e8f1160e75e2e4f0f411adedd3f53a3e81b82af853f3434393c8355` |
-
-The product's own `POST /api/sources/live-check` path was executed against its fixed four-URL allowlist at `2026-08-27T05:21:21.302Z`:
-
-| Source | Result | Bytes | Response SHA-256 |
-|---|---:|---:|---|
-| CAAM forecast | failed | 0 | none; TLS/network failure was not converted to success |
-| State Council client / CAAM final | HTTP 200 | 8,587 | `e33bf4aef4127e54e7833b9bb42bdf9b1167368867a0d35103d727561a1f79c0` |
-| CADA/CPCA annual report | HTTP 200 | 56,674 | `2fc2dcb647c101fdc2563761359c378b928004aed22b2a6f5a7a4b5c362c09ba` |
-| EVCIPA charging report | HTTP 200 | 1,433 | `57df779cae56bd336a99655ea1d8fbf8020b65d121e4c9960840feafe93e0172` |
-
-This proves bounded live retrieval and honest failure reporting. It does not claim arbitrary web search or independent truth certification.
-
-The machine-readable response is retained at `docs/verification/live-authority-check.json`. The current four-row UI is retained at `docs/assets/insightforge-live-check.png` (635,078 bytes; SHA-256 `7600ab9d9c77c06169af42b4cd6a04caa824fbec147ed65368497d7409bb1c3d`).
-
-## Upload and local-network boundary
-
-Automated tests send real bytes through the HTTP endpoint. PDF/CSV/TXT/XLSX inputs are accepted only after byte validation. Persistence uses UUID names, `0700` directories, `0600` files, temporary files and atomic rename. POST verifies the disk digest, GET revalidates metadata/path/type/size/SHA, and post-write tampering returns 409. A spoofed PDF, malformed XLSX, traversal filename, NUL or invalid-UTF-8 text and a body over 5 MiB are rejected. Browser E2E uploads a CSV whose filename contains an HTML injection payload, independently hashes the selected bytes, compares POST and GET receipts, and proves no injected DOM node exists.
-
-The server was also started at `127.0.0.1:4491` and observed listening only on `TCP 127.0.0.1:4491`. The loopback health request returned HTTP 200; a direct request to the host LAN address `172.20.10.14:4491` failed to connect. A unit/integration test additionally proves `start(..., "0.0.0.0")` rejects before binding.
-
-## Deployment boundary
-
-The production build and production-mode server were started and smoke-tested locally. A public or shared-network deployment was not performed: the owner explicitly withheld authority to deploy, change online configuration or enable production features unless separately authorized, and no deployment platform/project was supplied. Local process liveness is not represented as production deployment evidence. Completing that distinct check requires an explicit deployment target and authorization; the current loopback-only listener would also need an intentionally reviewed exposure architecture rather than an accidental host change.
-
-## Microsoft PowerPoint
-
-The first direct-OOXML deck opened in the installed Microsoft PowerPoint for macOS with the title marker “已修复”. This was treated as a failed acceptance result. OOXML diffing identified an invalid slide-master color map, invalid layout ID, incomplete theme style matrices and missing standard presentation relationships. The generator and regression tests were corrected.
-
-The regenerated deck then opened without the repair marker as a five-slide presentation. Through the Microsoft PowerPoint object model, slide 1 shape text was changed from `PROOF OF INSIGHT` to `OFFICE EDIT CHECK` and saved successfully.
-
-| Evidence file | Bytes | SHA-256 |
-|---|---:|---|
-| `docs/assets/insightforge-office-valid.pptx` | 17,488 | `5d6cb36493480bb5829f8950ece8b14681ffe58b6d3f335be77ad7d636b75c47` |
-| `docs/assets/insightforge-office-edit-check.pptx` | 19,479 | `57c6d0835d374d58399eb9562d4b8f1ae05b81fef75d86127c93f6414a3880d2` |
-
-The same valid deck was independently rendered to five PNG slides and `slides_test.py` reported `Test passed. No overflow detected.` The persistent montage is `docs/assets/insightforge-pptx-montage.png` with SHA-256 `c5d1ce6a09568cb3ff1e0413a7e3ba4d1a323e64516f686cebd41f63f8a5ab63`.
-
-No accessible Windows host with Microsoft PowerPoint was available. Therefore this evidence proves Microsoft PowerPoint for macOS compatibility and text editability, not Windows-specific compatibility. Completing the exact Windows check requires access to a Windows machine with desktop Microsoft PowerPoint; parser, LibreOffice, macOS PowerPoint or rendered images are not substitutes for that environment.
-
-## Real online-model output
-
-An authenticated online `gpt-5.6-sol` run received only the six allowlisted evidence IDs and was constrained by `docs/verification/online-llm-output-schema.json`. It returned five candidate judgments. The repository's `validateLlmDrafts` accepted 5/5; no unknown evidence ID appeared.
-
-| Evidence | Value |
-|---|---|
-| Output | `docs/verification/online-llm-output.json` |
-| Size | 2,698 bytes |
-| SHA-256 | `86ea57b67bc638424d682499b315325995d9dce8052592454a411116e6cbbb71` |
-| Validation record | `docs/verification/online-llm-validation.json` |
-
-This is a real online model→program validator result. It is not a claim that a deployable API credential exists in the repository or that the external ChatGPT Pro engineering conversation is the same as the product endpoint.
-
-## Current automated gates
-
-Executed from the isolated worktree:
+2026-08-28 在当前工作树与一个无 `.git`、无依赖、无构建和无运行状态的全新解包目录分别执行：
 
 ```text
-npm run verify                 exit 0; 24/24 Node tests; build and secret scan pass
-npm run test:e2e               exit 0; 1/1 Chromium scenario
-npm run demo:triple            exit 0; all three runs complete five states with 4 tools and 1 repair
-npm run smoke                  exit 0; production build server and health/page checks pass
-npm audit --audit-level=high   exit 0; 0 vulnerabilities
+npm ci                         PASS
+npm run verify                 PASS; 36/36; build; secret scan
+npm run test:e2e               PASS; 1/1 Chromium
+npm run demo:triple            PASS; 3/3
+npm run smoke                  PASS
+npm audit --audit-level=high   PASS; 0 vulnerabilities
 ```
 
-These are local acceptance results. No commit, push, PR or deployment is implied.
+详细结果见 `docs/TEST-RESULTS.md`。最终源码包的 SHA-256 和基线保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。
+
+## 模型提出、程序校验
+
+- 默认黄金 PLAN 和 SYNTHESIZE 消费有摘要清单的真实模型缓存，不再把开发者固定字符串伪装成 AI 输出。
+- 程序检查缓存文件、提示词摘要、精确研究问题、Schema、语义角色、工具白名单、证据/假设 ID 和 37.1%、47.6%、31.3%、3.04 等当前数值。
+- 无关问题不能消费缓存；确定性失配结果标记 `DETERMINISTIC`，不会伪装成 `AI_JUDGMENT`。
+- 可选在线 LLM 路径只允许一个显式 HTTPS 端点，任何配置、网络、Schema 或引用失败都 fail-closed，不自动切模型。
+- 已保存的真实在线模型输出及程序校验记录位于 `docs/verification/online-llm-output.json` 与 `online-llm-validation.json`；它证明一次真实模型→校验器调用，不代表仓库携带 API 凭据。
+
+## 信源联网证据
+
+单一 MediaWiki 提供方实时搜索于 `2026-08-27T15:38:33.771Z` 成功返回 5 个候选；响应 SHA-256 为 `cd9db395a50611005cd97cd5057f2b6a072e2127acb1c115ac47e5869824a218`。候选保持未验证，不自动进入事实。
+
+固定白名单核验于 `2026-08-27T15:39:53.405Z` 执行：
+
+| 来源 | 结果 | 字节 | SHA-256 / 错误 |
+|---|---:|---:|---|
+| CAAM 旧地址 | FAILED | 0 | `fetch failed` |
+| 国务院客户端转载 CAAM | VERIFIED | 8,587 | `e33bf4aef4127e54e7833b9bb42bdf9b1167368867a0d35103d727561a1f79c0` |
+| 中国汽车流通协会/乘联分会 | VERIFIED | 56,674 | `2fc2dcb647c101fdc2563761359c378b928004aed22b2a6f5a7a4b5c362c09ba` |
+| 中国充电联盟直页 | FAILED | 0 | 预期内容标记缺失，HTTP 200 外壳没有被误报成功 |
+
+机器记录见 `docs/verification/live-authority-check.json`，说明见 `docs/verification/LIVE-SOURCE-VERIFICATION-2026-08-27.md`。这证明受限实时搜索和白名单核验，不证明任意网站抓取或来源真理认证。
+
+## 上传与安全边界
+
+HTTP 测试发送真实 PDF/CSV/XLSX/TXT 字节。服务端校验扩展名、MIME、魔数/UTF-8/ZIP 结构、路径、大小、普通文件和 SHA-256，使用 UUID、`0700` 目录、`0600` 文件、临时文件与原子 rename。篡改后 GET 或运行会失败。
+
+集成测试证明 `uploadIds` 是 `POST /api/runs` 的正式输入，文件由同一五状态任务的 COLLECT 解析；这修复了“只有 validator、没有执行入口”的缺陷。服务只绑定 loopback，拒绝 `0.0.0.0`；CSP、前端文本转义、工具 allowlist 和提示词注入均有反证。
+
+## PPTX
+
+| 证据 | 字节 | SHA-256 |
+|---|---:|---|
+| `docs/assets/insightforge-office-valid.pptx` | 18,158 | `61bd293855e99b0ebf565a1dcbb9d92ff2e17132cc3198250d87e82e78867ce3` |
+| `docs/assets/insightforge-office-edit-check.pptx` | 20,156 | `27199f489a2183a83903d722fff65667c64457e89e8c9a94ca98708193b6381c` |
+| `docs/assets/insightforge-pptx-montage.png` | 1,460,150 | `964c99aabb88fe7bf7c93a550a3092b0c197a4ae0d5c4a7be2e38e6db3958b29` |
+
+最新原件在 Microsoft PowerPoint for macOS 中真实打开为 5 页；对象模型读取到中文标题。编辑第一张文本、保存、关闭并重新打开后读取到 `OFFICE EDIT CHECK`。PowerPoint 自身导出的 5 页 PDF 经视觉检查无中文方框或明显溢出。LibreOffice 的隔离运行时缺少 CJK 字体而产生方框，这一失败没有被隐藏，也没有用它否定 PowerPoint 的真实成功。
+
+没有可用 Windows 桌面 Microsoft PowerPoint 环境，所以 Windows 专项仍为外部未验证风险。
+
+## 外部阻断
+
+- 当前前端尚未完成上传 ID→运行、编辑/确认分离、确认理由/范围及成果历史展示。
+- 仓库不含在线模型密钥；现场默认使用明确标记且摘要锁定的缓存输出。
+- 公开部署没有目标和授权，未执行；当前 loopback 单用户服务也不应直接暴露到不可信网络。

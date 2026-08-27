@@ -18,7 +18,12 @@ export function resolveLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfi
   const baseUrl = env.INSIGHTFORGE_LLM_BASE_URL?.trim();
   const model = env.INSIGHTFORGE_LLM_MODEL?.trim();
   if (!apiKey || !baseUrl || !model) return null;
-  const endpoint = new URL(baseUrl);
+  let endpoint: URL;
+  try {
+    endpoint = new URL(baseUrl);
+  } catch {
+    return null;
+  }
   if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) return null;
   return { baseUrl, model, apiKey };
 }
@@ -38,7 +43,10 @@ export interface PlanStepDraft {
 
 export const PLAN_TOOL_ALLOWLIST = [
   "snapshot-search",
+  "live-source-search",
+  "authority-source-check",
   "pdf-reader",
+  "local-file-reader",
   "csv-calculator",
   "llm-synthesizer",
   "deterministic-audit",
@@ -85,12 +93,14 @@ interface ChatCompletionResponse {
   choices?: Array<{ message?: { content?: string } }>;
 }
 
+class NonRetryableLlmError extends Error {}
+
 /**
  * 同一模型、同一请求的传输层重试（最多 2 次）：仅覆盖连接被远端切断
  * （fetch reject，如 terminated/reset）与 429/5xx；4xx 鉴权类错误立即抛出。
  * 这不是模型 fallback——不换端点、不换模型、不降级。
  */
-async function postChatCompletion(config: LlmConfig, body: unknown, timeoutMs: number): Promise<ChatCompletionResponse> {
+async function postChatCompletion(config: LlmConfig, body: unknown, timeoutMs: number, retryDelayMs: number): Promise<ChatCompletionResponse> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const controller = new AbortController();
@@ -104,14 +114,15 @@ async function postChatCompletion(config: LlmConfig, body: unknown, timeoutMs: n
       });
       if (response.ok) return (await response.json()) as ChatCompletionResponse;
       const error = new Error(`LLM endpoint returned ${response.status}`);
-      if (response.status < 500 && response.status !== 429) throw error;
+      if (response.status < 500 && response.status !== 429) throw new NonRetryableLlmError(error.message);
       lastError = error;
     } catch (error) {
+      if (error instanceof NonRetryableLlmError) throw error;
       lastError = error;
     } finally {
       clearTimeout(timer);
     }
-    if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
   throw lastError instanceof Error ? lastError : new Error("LLM request failed after transport retry");
 }
@@ -120,7 +131,7 @@ async function postChatCompletion(config: LlmConfig, body: unknown, timeoutMs: n
  * 调用 OpenAI 兼容接口生成候选判断草稿。本函数不做可信校验——草稿必须经过
  * validateLlmDrafts 过滤（引用白名单、条数、文本长度）后才能进入证据链。
  */
-export async function draftConclusions(config: LlmConfig, context: LlmSynthesisContext, timeoutMs = 90_000): Promise<LlmDraft[]> {
+export async function draftConclusions(config: LlmConfig, context: LlmSynthesisContext, timeoutMs = 90_000, retryDelayMs = 1500): Promise<LlmDraft[]> {
   const payload = await postChatCompletion(config, {
     model: config.model,
     temperature: 0.2,
@@ -131,7 +142,7 @@ export async function draftConclusions(config: LlmConfig, context: LlmSynthesisC
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: compactContext(context) },
     ],
-  }, timeoutMs);
+  }, timeoutMs, retryDelayMs);
   const content = payload.choices?.[0]?.message?.content;
   if (!content) throw new Error("LLM response has no message content (model may have exhausted max_tokens on reasoning before emitting content)");
   const parsed = JSON.parse(content) as { conclusions?: unknown };
@@ -163,7 +174,7 @@ export function validateLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[]
  * 模型提出（PLAN）：调用同一 OpenAI 兼容端点生成研究计划草稿。
  * 与 draftConclusions 一样不做可信校验——必须经 validatePlanSteps 裁决。
  */
-export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext, timeoutMs = 90_000): Promise<PlanStepDraft[]> {
+export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext, timeoutMs = 90_000, retryDelayMs = 1500): Promise<PlanStepDraft[]> {
   const payload = await postChatCompletion(config, {
     model: config.model,
     temperature: 0.2,
@@ -181,7 +192,7 @@ export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext,
         ].join("\n"),
       },
     ],
-  }, timeoutMs);
+  }, timeoutMs, retryDelayMs);
   const content = payload.choices?.[0]?.message?.content;
   if (!content) throw new Error("LLM response has no message content (model may have exhausted max_tokens on reasoning before emitting content)");
   const parsed = JSON.parse(content) as { steps?: unknown };
@@ -211,7 +222,5 @@ export function validatePlanSteps(drafts: PlanStepDraft[], allowlist: readonly s
   const deliverCount = valid.filter((draft) => draft.toolName === "pptx-generator").length;
   if (auditCount !== 1 || deliverCount !== 1) return null;
   if (valid[valid.length - 1]?.toolName !== "pptx-generator") return null;
-  const auditIndex = valid.findIndex((draft) => draft.toolName === "deterministic-audit");
-  if (auditIndex === -1 || auditIndex > valid.length - 2) return null;
   return valid;
 }

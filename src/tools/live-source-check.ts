@@ -5,22 +5,26 @@ const AUTHORITY_SOURCES = [
   {
     title: "中汽协 2024 中国汽车市场预测",
     url: "https://www.caam.org.cn/chn/1/cate_3/con_5236311.html",
+    expectedMarkers: ["1150", "新能源汽车"],
   },
   {
     title: "国务院客户端转载：2024 年中国汽车产销量",
     url: "https://app.www.gov.cn/govdata/gov/202501/14/523622/article.html",
+    expectedMarkers: ["1286.6", "40.9%"],
   },
   {
     title: "中国汽车流通协会：2024 年 12 月乘用车市场分析",
     url: "https://www.cada.cn/Trends/info_91_10118.html",
+    expectedMarkers: ["47.6%", "1,089.9"],
   },
   {
     title: "中国充电联盟：2024 年全国充换电基础设施运行情况",
     url: "https://www.evcipa.org.cn/newsinfo/8137834.html",
+    expectedMarkers: ["357.9", "272.6"],
   },
 ] as const;
 
-type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+export type AuthorityFetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
 async function readLimited(response: Response) {
   const length = Number(response.headers.get("content-length") ?? 0);
@@ -48,7 +52,7 @@ async function readLimited(response: Response) {
   return bytes;
 }
 
-export async function checkLiveSources(fetcher: Fetcher = fetch) {
+export async function checkLiveSources(fetcher: AuthorityFetcher = fetch) {
   const checkedAt = new Date().toISOString();
   const allowedHosts = new Set(AUTHORITY_SOURCES.map((source) => new URL(source.url).hostname));
   const results = await Promise.all(AUTHORITY_SOURCES.map(async (source) => {
@@ -65,6 +69,13 @@ export async function checkLiveSources(fetcher: Fetcher = fetch) {
       if (contentType && !contentType.includes("text/html")) throw new Error("Unexpected content type");
       const bytes = await readLimited(response);
       if (bytes.byteLength < 64) throw new Error("Authority response is unexpectedly short");
+      const text = new TextDecoder().decode(bytes);
+      if (/too many requests|captcha|访问验证|access denied|<title>\s*(?:error|错误)/iu.test(text)) {
+        throw new Error("Authority host returned a challenge or error page");
+      }
+      if (!source.expectedMarkers.every((marker) => text.includes(marker))) {
+        throw new Error("Authority page is missing expected content markers");
+      }
       return {
         title: source.title,
         url: source.url,
@@ -75,7 +86,7 @@ export async function checkLiveSources(fetcher: Fetcher = fetch) {
         sha256: createHash("sha256").update(bytes).digest("hex"),
         error: null,
       };
-    } catch {
+    } catch (error) {
       return {
         title: source.title,
         url: source.url,
@@ -84,7 +95,7 @@ export async function checkLiveSources(fetcher: Fetcher = fetch) {
         httpStatus: null,
         sizeBytes: 0,
         sha256: "",
-        error: "Network request failed",
+        error: error instanceof Error ? error.message : "Network request failed",
       };
     }
   }));
