@@ -1,0 +1,33 @@
+{
+  "mode": "offline-snapshot",
+  "capturedAt": "2026-08-27T00:00:00.000Z",
+  "sources": [
+    {
+      "id": "source-web-association",
+      "title": "2024年12月份全国乘用车市场分析",
+      "url": "https://www.cada.cn/Trends/info_91_10118.html",
+      "publisher": "中国汽车流通协会乘用车市场信息联席分会",
+      "publishedAt": "2025-01-08",
+      "excerpt": "该协会报告称，2024年新能源乘用车国内零售1089.9万辆，新能源车零售年渗透率为47.6%。该口径是乘用车国内零售，不等同于全汽车新车销量。",
+      "contentType": "SOURCE_OPINION"
+    },
+    {
+      "id": "source-web-outlook",
+      "title": "乘联分会2025年新能源乘用车市场预测",
+      "url": "https://www.cada.cn/Trends/info_91_10118.html",
+      "publisher": "中国汽车流通协会乘用车市场信息联席分会",
+      "publishedAt": "2025-01-08",
+      "excerpt": "该协会预测2025年新能源乘用车零售1330万辆、同比增长20%，渗透率57%。这是来源观点和未来预测，不是已发生事实。",
+      "contentType": "SOURCE_OPINION"
+    },
+    {
+      "id": "source-web-charging",
+      "title": "2024年全国电动汽车充换电基础设施运行情况",
+      "url": "https://www.evcipa.org.cn/newsinfo/8137834.html",
+      "publisher": "中国电动汽车充电基础设施促进联盟",
+      "publishedAt": "2025-01-23",
+      "excerpt": "联盟成员单位截至2024年12月上报公共充电桩357.9万台；2023年同口径为272.6万台。",
+      "contentType": "SOURCE_OPINION"
+    }
+  ]
+}

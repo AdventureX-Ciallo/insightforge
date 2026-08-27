@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+runs/
+test-results/
+playwright-report/
+evidence/
+.insightforge/
+artifacts/
+coverage/
+.cache/
+*.log
+demo-assets/.recordings/
+.DS_Store

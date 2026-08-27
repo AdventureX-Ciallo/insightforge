@@ -1,0 +1,43 @@
+{
+  "name": "insightforge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Offline-first, evidence-native multi-step industry research agent.",
+  "bin": {
+    "insightforge": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-static.mjs",
+    "clean": "node scripts/clean.mjs",
+    "demo": "node dist/cli.js demo",
+    "demo:triple": "node dist/cli.js triple",
+    "dev": "tsx watch src/server.ts",
+    "lint": "tsc --noEmit",
+    "record:demo": "node scripts/record-demo.mjs",
+    "secret-scan": "node scripts/secret-scan.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "start": "node dist/server.js",
+    "test": "NODE_ENV=test node --import tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm test && npm run build && npm run secret-scan"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pdfjs-dist": "5.4.149",
+    "jszip": "3.10.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "playwright": "1.60.0",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
+  }
+}

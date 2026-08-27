@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["conclusions"],
+  "properties": {
+    "conclusions": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "evidenceIds", "assumptions", "missingEvidence"],
+        "properties": {
+          "text": { "type": "string", "minLength": 8 },
+          "evidenceIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "evidence-source-web-association",
+                "evidence-source-web-outlook",
+                "evidence-source-web-charging",
+                "evidence-pdf-page-1",
+                "evidence-pdf-page-2",
+                "evidence-market-csv"
+              ]
+            }
+          },
+          "assumptions": { "type": "array", "items": { "type": "string" } },
+          "missingEvidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

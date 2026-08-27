@@ -1,0 +1,43 @@
+{
+  "mode": "live-authority-check",
+  "checkedAt": "2026-08-27T05:21:21.302Z",
+  "results": [
+    {
+      "title": "中汽协 2024 中国汽车市场预测",
+      "url": "https://www.caam.org.cn/chn/1/cate_3/con_5236311.html",
+      "status": "failed",
+      "httpStatus": null,
+      "sizeBytes": 0,
+      "sha256": "",
+      "error": "Network request failed"
+    },
+    {
+      "title": "国务院客户端转载：2024 年中国汽车产销量",
+      "url": "https://app.www.gov.cn/govdata/gov/202501/14/523622/article.html",
+      "status": "verified",
+      "httpStatus": 200,
+      "sizeBytes": 8587,
+      "sha256": "e33bf4aef4127e54e7833b9bb42bdf9b1167368867a0d35103d727561a1f79c0",
+      "error": null
+    },
+    {
+      "title": "中国汽车流通协会：2024 年 12 月乘用车市场分析",
+      "url": "https://www.cada.cn/Trends/info_91_10118.html",
+      "status": "verified",
+      "httpStatus": 200,
+      "sizeBytes": 56674,
+      "sha256": "2fc2dcb647c101fdc2563761359c378b928004aed22b2a6f5a7a4b5c362c09ba",
+      "error": null
+    },
+    {
+      "title": "中国充电联盟：2024 年全国充换电基础设施运行情况",
+      "url": "https://www.evcipa.org.cn/newsinfo/8137834.html",
+      "status": "verified",
+      "httpStatus": 200,
+      "sizeBytes": 1433,
+      "sha256": "57df779cae56bd336a99655ea1d8fbf8020b65d121e4c9960840feafe93e0172",
+      "error": null
+    }
+  ],
+  "boundary": "Three of four allowlisted authority URLs were retrieved and hashed in the product runtime. The CAAM origin timed out in this runtime; its exact URL and figures were separately checked through web retrieval, so it is not marked as a successful product-runtime fetch."
+}

@@ -1,0 +1,23 @@
+{
+  "verifiedAt": "2026-08-27T05:19:54Z",
+  "execution": {
+    "channel": "Codex CLI authenticated OpenAI provider",
+    "model": "gpt-5.6-sol",
+    "sandbox": "read-only",
+    "ephemeral": true,
+    "outputSchema": "online-llm-output-schema.json"
+  },
+  "result": {
+    "inputDrafts": 5,
+    "acceptedDrafts": 5,
+    "unknownEvidenceIds": 0,
+    "validatedBy": "src/llm.ts#validateLlmDrafts",
+    "validated": true
+  },
+  "output": {
+    "file": "online-llm-output.json",
+    "sizeBytes": 2698,
+    "sha256": "86ea57b67bc638424d682499b315325995d9dce8052592454a411116e6cbbb71"
+  },
+  "boundary": "This is a real authenticated online-model run whose JSON was accepted by the repository validator. It does not embed credentials and does not claim that a distributable OpenAI-compatible API key is present in the project."
+}

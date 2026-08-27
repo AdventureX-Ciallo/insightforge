@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="InsightForge：可追问、可审查、可持续更新的行业研究 Agent。" />
+    <title>InsightForge · Proof of Insight</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="noise" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="InsightForge 首页">
+        <span class="brand-mark">IF</span>
+        <span><strong>InsightForge</strong><small>PROOF OF INSIGHT</small></span>
+      </a>
+      <div class="topbar-meta">
+        <span class="offline-pill"><i></i> 使用缓存快照</span>
+        <span class="version">GOLDEN CASE · v1.0</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">AI，不止完成一步</p>
+          <h1>让每条行业判断，<br /><em>经得起追问。</em></h1>
+          <p class="hero-description">从研究问题到信源、计算、审查和可编辑交付物，一条真实运行、证据原生的人机协作链。</p>
+        </div>
+        <div class="task-composer">
+          <label for="research-question">研究问题</label>
+          <textarea id="research-question" rows="3">中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？</textarea>
+          <div class="upload-box">
+            <div>
+              <label for="source-file">补充本地资料（可选）</label>
+              <p>服务端校验 PDF / CSV / XLSX / TXT，单文件上限 5 MiB</p>
+            </div>
+            <input id="source-file" type="file" accept=".pdf,.csv,.xlsx,.txt,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            <button id="upload-button" class="ghost-button" type="button" disabled>验证并上传资料</button>
+          </div>
+          <p id="upload-result" class="upload-result" aria-live="polite" hidden></p>
+          <div class="live-check-box">
+            <div>
+              <strong>权威来源实时核验（可选）</strong>
+              <p>只访问固定白名单：中汽协、国务院客户端、中国汽车流通协会、中国充电联盟；失败不影响离线演示。</p>
+            </div>
+            <button id="live-check-button" class="ghost-button" type="button">联网核验来源</button>
+          </div>
+          <div id="live-check-result" class="live-check-result" aria-live="polite" hidden></div>
+          <div class="composer-footer">
+            <p><span>内置资料</span> 网页快照 · PDF · CSV v1/v2</p>
+            <button id="run-button" class="primary-button" type="button"><span>运行黄金案例</span><b>→</b></button>
+          </div>
+          <p id="global-error" class="global-error" role="alert" hidden></p>
+        </div>
+      </section>
+
+      <section id="workspace" class="workspace" hidden>
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">RESEARCH RUN</p>
+            <h2 id="run-title">任务执行中</h2>
+          </div>
+          <div id="terminal-status" class="terminal-status">RUNNING</div>
+        </div>
+
+        <div id="state-rail" class="state-rail" aria-label="五步研究任务状态"></div>
+
+        <div class="workspace-grid">
+          <aside class="side-nav" aria-label="研究报告导航">
+            <button class="nav-item active" data-tab="overview"><span>01</span>任务总览</button>
+            <button class="nav-item" data-tab="conclusions"><span>02</span>候选结论</button>
+            <button class="nav-item" data-tab="evidence"><span>03</span>证据底稿</button>
+            <button class="nav-item" data-tab="audit"><span>04</span>审查修正</button>
+            <button class="nav-item" data-tab="updates"><span>05</span>来源更新</button>
+            <button class="nav-item" data-tab="artifacts"><span>06</span>成果交付</button>
+          </aside>
+          <section id="report-panel" class="report-panel" aria-live="polite"></section>
+        </div>
+      </section>
+    </main>
+
+    <aside id="drawer" class="drawer" aria-label="证据路径" aria-hidden="true">
+      <button id="drawer-close" class="drawer-close" type="button" aria-label="关闭证据路径">×</button>
+      <div id="drawer-content"></div>
+    </aside>
+    <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+
+    <dialog id="edit-dialog">
+      <form method="dialog">
+        <p class="eyebrow">HUMAN DECISION</p>
+        <h3>编辑候选结论</h3>
+        <p id="edit-help">原始 AI 文本将被保留，修订后的文字会记录为人工确认版本。</p>
+        <textarea id="edit-text" rows="5"></textarea>
+        <div class="dialog-actions">
+          <button value="cancel" class="ghost-button">取消</button>
+          <button id="edit-save" value="default" class="primary-button">保存并确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
