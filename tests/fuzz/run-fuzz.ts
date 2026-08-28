@@ -11,7 +11,7 @@ import { runUploadFuzz } from "./upload.fuzz.js";
 
 const CASES = {
   engine: 30,
-  structure: 152_000,
+  structure: 172_000,
   api: 5_000,
   audit: 100_000,
   upload: 165_000,

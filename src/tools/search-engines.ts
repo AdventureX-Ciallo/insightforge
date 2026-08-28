@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
+import { resolveDnsChain } from "./dns-chain.js";
 import { MAX_SOURCES, truncateSources } from "../source-limit.js";
 export { MAX_SOURCES } from "../source-limit.js";
 export const searchEngines = ["bing", "google", "baidu"] as const;
@@ -39,7 +40,7 @@ export function isFakeIpProxyAddress(value: string) {
   const address = bareAddress(value);
   return isIP(address) === 4 && fakeIpProxyAddresses.check(address, "ipv4");
 }
-const defaultResolver: SearchResolver = async (hostname) => lookup(hostname, { all: true, verbatim: true });
+const defaultResolver: SearchResolver = async (hostname) => resolveDnsChain(hostname);
 /** 请求前校验 URL、引擎主机和当次 DNS 地址；默认 fetch 可能再次解析，因此这不是完整的 pinned-IP/DNS-rebinding 防御。 */
 export async function validatePublicHttpUrl(input: string, allowedHosts: readonly string[], resolver: SearchResolver = defaultResolver) {
   let url: URL;
