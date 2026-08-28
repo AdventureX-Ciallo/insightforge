@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { createInsightForgeServer } from "../src/server.js";
-import { isBlockedIpAddress, searchSelectedEngine, validateOutboundSearchUrl, type SearchEngine } from "../src/tools/search-engines.js";
+import { MAX_SOURCES, isBlockedIpAddress, searchSelectedEngine, validateOutboundSearchUrl, type SearchEngine } from "../src/tools/search-engines.js";
 
 const publicResolver = async () => [{ address: "93.184.216.34", family: 4 }];
 
@@ -28,6 +28,29 @@ test("Bing, Google, and Baidu selection requests one allowlisted host and return
     assert.equal(result.candidates[0]?.materialRole, "CANDIDATE_SOURCE");
     assert.equal(result.candidates[0]?.authorityVerified, false);
   }
+});
+
+test("the eleventh discovered source is truncated at MAX_SOURCES and the decision is recorded", async () => {
+  const html = Array.from({ length: MAX_SOURCES + 1 }, (_value, index) => (
+    `<a href="https://source-${index + 1}.example/report">Source ${index + 1}</a>`
+  )).join("");
+  const result = await searchSelectedEngine(
+    "bing",
+    "新能源汽车 充电",
+    async () => new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+    publicResolver,
+  );
+
+  assert.equal(result.candidates.length, MAX_SOURCES);
+  assert.equal(result.candidates.some((item) => item.title === "Source 11"), false);
+  assert.deepEqual(result.sourceLimitTrace, {
+    maxSources: MAX_SOURCES,
+    discoveredCount: MAX_SOURCES + 1,
+    retainedCount: MAX_SOURCES,
+    truncatedCount: 1,
+    truncated: true,
+    reason: "MAX_SOURCES",
+  });
 });
 
 test("search validates protocol, host, and every DNS address before fetch", async () => {

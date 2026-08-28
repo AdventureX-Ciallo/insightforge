@@ -332,6 +332,15 @@ export interface ModelProvenance {
   cacheFile: string | null;
 }
 
+export interface SourceLimitTrace {
+  maxSources: number;
+  discoveredCount: number;
+  retainedCount: number;
+  truncatedCount: number;
+  truncated: boolean;
+  reason: "MAX_SOURCES" | null;
+}
+
 export interface ResearchRun {
   schemaVersion: "1.0";
   id: string;
@@ -349,6 +358,7 @@ export interface ResearchRun {
   plan: ResearchPlan;
   steps: RunStep[];
   events: ToolCallEvent[];
+  sourceLimitTrace: SourceLimitTrace;
   sources: ResearchSource[];
   sourceVersions: SourceVersion[];
   evidence: Evidence[];
@@ -657,6 +667,14 @@ export const evidencePackageSchema = z.object({
   synthesisMode: z.enum(synthesisModes),
   sourceDiscoveryMode: z.enum(sourceDiscoveryModes),
   authorityVerificationMode: z.enum(authorityVerificationModes),
+  sourceLimitTrace: z.object({
+    maxSources: z.literal(10),
+    discoveredCount: z.number().int().nonnegative(),
+    retainedCount: z.number().int().min(1).max(10),
+    truncatedCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    reason: z.literal("MAX_SOURCES").nullable(),
+  }).strict(),
   sources: z.array(sourceSchema).min(1).max(10),
   sourceVersions: z.array(sourceVersionSchema).min(1),
   evidence: z.array(evidenceSchema).min(1),
@@ -694,6 +712,14 @@ const researchRunObjectSchema = z.object({
   plan: researchPlanSchema,
   steps: z.array(runStepSchema).length(5),
   events: z.array(toolCallEventSchema),
+  sourceLimitTrace: z.object({
+    maxSources: z.literal(10),
+    discoveredCount: z.number().int().nonnegative(),
+    retainedCount: z.number().int().min(1).max(10),
+    truncatedCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    reason: z.literal("MAX_SOURCES").nullable(),
+  }).strict(),
   sources: z.array(sourceSchema).min(1).max(10),
   sourceVersions: z.array(sourceVersionSchema).min(1),
   evidence: z.array(evidenceSchema).min(1),

@@ -6,11 +6,11 @@
 
 | 命令 | 结果 |
 |---|---|
-| `npm test` | PASS：94/94（88 个顶层测试，Path 1–6 矩阵含 6 个子测试） |
+| `npm test` | PASS：97/97（91 个顶层测试，Path 1–6 矩阵含 6 个子测试） |
 | `npm run coverage` | PASS：`src/**` 语句/分支/函数/行均 100% |
 | `npm run verify` | PASS：类型检查、100% 覆盖率门禁、生产构建、密钥扫描 |
-| `npm run fuzz` | PASS：seed `520628262`，六套累计 522,030 例；5,138 行源码对应 101.60 例/行；结构套件含至少 6,000 次完整图单边变质 |
-| `npm run fuzz:report` | PASS：同 seed 522,030 例，13.822 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
+| `npm run fuzz` | PASS：seed `520628262`，六套累计 522,030 例；5,219 行源码对应 100.02 例/行；结构套件含至少 6,000 次完整图单边变质 |
+| `npm run fuzz:report` | PASS：同 seed 522,030 例，11.601 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
 | `NODE_ENV=test node --import tsx --test tests/sse.test.ts` | PASS：2/2；真实 ReadableStream、心跳、终态关流、断开清理与跨 run 隔离 |
 | `npm run test:e2e` | PASS：1/1；真实 Chromium 入口完成黄金任务、审阅、来源更新和成果检查，4.3 s；等待真实写响应，避免假阳性 |
 | `npm run demo:triple` | PASS：3/3；441/95/89 ms，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
@@ -32,7 +32,7 @@ npm run smoke                  PASS
 npm audit --audit-level=high   PASS; 0 vulnerabilities
 ```
 
-以上 36/36 是扩展到当前 94 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。
+以上 36/36 是扩展到当前 97 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。SHA-256 前缀 `30601c95` 的已验 ZIP 是本轮收口前基线，本节新增改动尚未重新打包，不能把旧哈希说成当前工作树哈希。
 
 ## 关键反证
 
@@ -43,6 +43,7 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 - PDF 中的中英文提示词注入只作为来源材料，不改变计划、不读取环境变量、不增加工具、不成为确认结论。
 - v1→v2 只让依赖对象 stale，撤销相关确认并生成新 ArtifactVersion；无关结论和旧成果保持。
 - EDIT 只产生 `HUMAN_EDITED` 修订并保持待复核；CONFIRM 独立执行。
+- `MAX_SOURCES=10` 同时作用于 Bing/Google/百度候选、单提供方搜索、离线快照和运行 COLLECT；第 11 条候选被截断，搜索响应与最终运行对象均记录发现数、保留数、截断数和 `MAX_SOURCES` 原因。完整运行反证使用 9 个网页候选加 PDF/CSV 形成 11 个总信源，最终保留 10 个且 COLLECT 摘要明确记录截断 1 个。
 
 ## Path 1–6 对抗矩阵
 
@@ -55,7 +56,7 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 | Path 5 交付 | 人工动作后重读 V1，并请求 V999 | V1 内容快照不变（仅 CURRENT→SUPERSEDED）；V999 返回 404 |
 | Path 6 更新 | DNS 预检同时返回公网与环回地址 | 搜索在 fetch 前拒绝，fetch 调用数为 0；不据此声称消除再次解析的 TOCTOU |
 
-物理行统计口径为 `src/**/*.ts` 与 `tests/**/*.ts` 的 `wc -l`：生产 5,138 行，测试 3,841 行，测试/生产为 0.748:1（74.8%）。这与“随机执行用例/生产源码行”100:1 是不同指标。
+物理行统计口径为 `src/**/*.ts` 与 `tests/**/*.ts` 的 `wc -l`：生产 5,219 行，测试 3,940 行，测试/生产为 0.755:1（75.5%）。这与“随机执行用例/生产源码行”100:1 是不同指标。
 
 ## P4 SSE 与随机测试证据
 
@@ -70,7 +71,7 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 | 审计变质 | 100,000 | 0.935 s | 删引用降级；同期间异值冲突；数值/类型变化改变输出 |
 | 上传模糊 | 165,000 | 1.230 s | 白名单外与穿越拒绝；随机字节失败有类型；成功文件 0600 |
 | SSRF 预检随机 | 100,000 | 0.749 s | 保留段/环回/畸形目标全部拒绝；fetch 调用数始终为 0 |
-| **合计** | **522,030** | **13.822 s** | **目标 513,800；达到 101.60 例/源码行** |
+| **合计** | **522,030** | **11.601 s** | **目标 521,900；达到 100.02 例/源码行** |
 
 ## PPTX 独立验收
 
@@ -90,4 +91,71 @@ Windows 桌面 Microsoft PowerPoint 当前不可用，因此 Windows 专项打�
 
 本轮 E2E 曾复现人工编辑与来源更新并发写导致状态覆盖；服务端现按 `runId` 串行化写操作，API 回归会并发发送两项操作并断言最终同时保留人工修订和来源 v2。页面 E2E 也改为等待真实 HTTP 响应，避免用原本就存在的 `PENDING_REVIEW` 文本制造假通过。
 
-在线单一提供方搜索已真实成功；固定白名单核验为 2/4 内容校验成功、2/4 如实失败。离线黄金案例仍只消费明确标记的快照。公开部署未获授权，也未执行。
+历史记录中的单提供方搜索成功与固定白名单 2/4 成功，不替代下述 2026-08-28 当次环境实测。离线黄金案例仍只消费明确标记的快照。公开部署未获授权，也未执行。
+
+## 2026-08-28 三搜索引擎真实只读实测
+
+执行方式：直接调用产品函数 `searchSelectedEngine()`，使用默认 DNS resolver、默认 `fetch`、真实查询“中国新能源汽车 公共充电基础设施 2024 行业报告”；未注入模拟响应，未绕过 URL/host/DNS/SSRF 校验。三次调用均在请求网页前因本机 DNS 返回 RFC 2544 基准测试保留网段 `198.18.0.0/15` 而 fail-closed，因此没有到达搜索结果页，也没有可伪装为成功的挑战页。
+
+产品函数原始结果：
+
+```json
+[
+  {
+    "engine": "bing",
+    "query": "中国新能源汽车 公共充电基础设施 2024 行业报告",
+    "startedAt": "2026-08-28T04:31:29.948Z",
+    "completedAt": "2026-08-28T04:31:29.961Z",
+    "durationMs": 12,
+    "outcome": "failure",
+    "error": "Search target resolves to a private, reserved, or loopback address"
+  },
+  {
+    "engine": "google",
+    "query": "中国新能源汽车 公共充电基础设施 2024 行业报告",
+    "startedAt": "2026-08-28T04:31:29.961Z",
+    "completedAt": "2026-08-28T04:31:29.964Z",
+    "durationMs": 3,
+    "outcome": "failure",
+    "error": "Search target resolves to a private, reserved, or loopback address"
+  },
+  {
+    "engine": "baidu",
+    "query": "中国新能源汽车 公共充电基础设施 2024 行业报告",
+    "startedAt": "2026-08-28T04:31:29.964Z",
+    "completedAt": "2026-08-28T04:31:29.967Z",
+    "durationMs": 3,
+    "outcome": "failure",
+    "error": "Search target resolves to a private, reserved, or loopback address"
+  }
+]
+```
+
+同轮 DNS 原始观测（`2026-08-28T04:31:41.820Z`）：
+
+```json
+{"host":"www.bing.com","addresses":[{"address":"198.18.1.116","family":4}]}
+{"host":"www.google.com","addresses":[{"address":"198.18.1.68","family":4}]}
+{"host":"www.baidu.com","addresses":[{"address":"198.18.1.123","family":4}]}
+```
+
+结论：三引擎代码都经过了真实 DNS 路径，但本环境无法证明任一引擎取得真实候选；当前可验证的是安全边界按设计阻断保留地址。不得以单元测试或历史网络成功替代本轮失败。
+
+## 2026-08-28 在线 LLM 环境检查
+
+只检查进程环境变量是否存在，不读取或记录任何值，也不读取本地 settings 文件作为替代。原始结果：
+
+```json
+{
+  "checkedAt": "2026-08-28T04:31:52.155Z",
+  "presence": {
+    "INSIGHTFORGE_LLM_API_KEY": false,
+    "INSIGHTFORGE_LLM_BASE_URL": false,
+    "INSIGHTFORGE_LLM_MODEL": false
+  },
+  "liveLlmConfigResolved": false,
+  "outcome": "not-run-missing-environment-config"
+}
+```
+
+结论：本轮没有环境 Key，故按要求未发起线上 LLM 请求；认证缓存和模拟测试均未被当作线上成功。线上 PLAN/SYNTHESIZE 成功仍是未关闭边界。

@@ -1,6 +1,10 @@
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 
+import { MAX_SOURCES, truncateSources } from "../source-limit.js";
+
+export { MAX_SOURCES } from "../source-limit.js";
+
 export const searchEngines = ["bing", "google", "baidu"] as const;
 export type SearchEngine = (typeof searchEngines)[number];
 
@@ -105,18 +109,21 @@ function candidateUrl(hrefValue: string, requestUrl: URL) {
 }
 
 export function parseSearchCandidates(html: string, engine: SearchEngine, requestUrl: URL) {
+  return parseSearchCandidatesWithTrace(html, engine, requestUrl).candidates;
+}
+
+function parseSearchCandidatesWithTrace(html: string, engine: SearchEngine, requestUrl: URL) {
   const candidates: Array<{ title: string; url: string; engine: SearchEngine; materialRole: "CANDIDATE_SOURCE"; authorityVerified: false }> = [];
   const seen = new Set<string>();
-  const anchors = html.matchAll(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/giu);
-  for (const match of anchors) {
+  for (const match of html.matchAll(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/giu)) {
     const url = candidateUrl(match[2]!, requestUrl);
     const title = plainText(match[3]!);
     if (!url || !title || seen.has(url) || new URL(url).hostname === requestUrl.hostname) continue;
     seen.add(url);
     candidates.push({ title, url, engine, materialRole: "CANDIDATE_SOURCE", authorityVerified: false });
-    if (candidates.length === 10) break;
   }
-  return candidates;
+  const limited = truncateSources(candidates, MAX_SOURCES);
+  return { candidates: limited.items, sourceLimitTrace: limited.trace };
 }
 
 async function responseText(response: Response) {
@@ -150,5 +157,5 @@ export async function searchSelectedEngine(
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType && !contentType.includes("text/html")) throw new Error("Search engine returned an unexpected content type");
   const html = await responseText(response);
-  return { engine, query: normalized, capturedAt: new Date().toISOString(), candidates: parseSearchCandidates(html, engine, validatedUrl) };
+  return { engine, query: normalized, capturedAt: new Date().toISOString(), ...parseSearchCandidatesWithTrace(html, engine, validatedUrl) };
 }

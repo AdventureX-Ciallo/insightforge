@@ -20,6 +20,7 @@ import {
 } from "./domain.js";
 import { hashFile, hashValue } from "./hash.js";
 import { applySourceConfidence } from "./source-confidence.js";
+import { MAX_SOURCES, truncateSources } from "./source-limit.js";
 import { draftConclusions, draftPlanSteps, PLAN_TOOL_ALLOWLIST, resolveLlmConfig, validateLlmDrafts, validatePlanSteps, type LlmConfig } from "./llm.js";
 import { GOLDEN_RESEARCH_QUESTION, loadCachedModelPlan, loadCachedModelSynthesis } from "./model-cache.js";
 import {
@@ -62,7 +63,7 @@ export interface RunGoldenCaseOptions {
   onToolEvent?: (event: ToolCallEvent) => void | Promise<void>;
 }
 
-export const MAX_RUN_SOURCES = 10;
+export const MAX_RUN_SOURCES = MAX_SOURCES;
 export const MAX_RUN_UPLOADS = 5;
 
 const isoNow = () => new Date().toISOString();
@@ -274,7 +275,19 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     const sourceVersion = options.sourceVersion ?? "v1";
     const csvPath = join(options.fixtureDir, `market_${sourceVersion}.csv`);
     const metrics = await recordTool(options, events, "csv-calculator", `读取 ${basename(csvPath)} 并执行确定性重算`, () => calculateMarketMetrics(csvPath));
-    const web = webGraph(search);
+    const uploadedCount = options.uploadedFiles?.length ?? 0;
+    const fixedLocalSourceCount = 2;
+    const webCapacity = MAX_SOURCES - fixedLocalSourceCount - uploadedCount;
+    const boundedWeb = truncateSources(search.results, webCapacity);
+    const sourceLimitTrace = {
+      maxSources: MAX_SOURCES,
+      discoveredCount: search.sourceLimitTrace.discoveredCount + fixedLocalSourceCount + uploadedCount,
+      retainedCount: boundedWeb.items.length + fixedLocalSourceCount + uploadedCount,
+      truncatedCount: search.sourceLimitTrace.discoveredCount - boundedWeb.items.length,
+      truncated: search.sourceLimitTrace.discoveredCount > boundedWeb.items.length,
+      reason: search.sourceLimitTrace.discoveredCount > boundedWeb.items.length ? "MAX_SOURCES" as const : null,
+    };
+    const web = webGraph({ ...search, sources: boundedWeb.items, results: boundedWeb.items });
     const pdfSourceVersionId = "source-version-pdf-brief-snapshot";
     const csvSourceVersionId = `source-version-market-csv-${sourceVersion}`;
     const sources: ResearchSource[] = [
@@ -300,7 +313,8 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       sourceVersions.push(...uploadGraph.sourceVersions);
       evidence.push(...uploadGraph.evidence);
     }
-    finishStep(activeStep, { sourceIds: sources.map((source) => source.id), evidenceIds: evidence.map((item) => item.id), sourceVersionIds: sourceVersions.map((item) => item.id), metrics }, `${sources.length} 个信源、${evidence.length} 条可定位证据；${options.uploadedFiles?.length ?? 0} 个上传材料已进入 COLLECT`);
+    const sourceLimitSummary = sourceLimitTrace.truncated ? `；MAX_SOURCES=${MAX_SOURCES} 已截断 ${sourceLimitTrace.truncatedCount} 个候选并留痕` : `；MAX_SOURCES=${MAX_SOURCES} 未触发截断`;
+    finishStep(activeStep, { sourceIds: sources.map((source) => source.id), evidenceIds: evidence.map((item) => item.id), sourceVersionIds: sourceVersions.map((item) => item.id), metrics, sourceLimitTrace }, `${sources.length} 个信源、${evidence.length} 条可定位证据；${options.uploadedFiles?.length ?? 0} 个上传材料已进入 COLLECT${sourceLimitSummary}`);
     await publishProgress(options, steps);
 
     activeStep = startStep(steps, "SYNTHESIZE", [steps[1]!.outputId]);
@@ -372,6 +386,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       plan,
       steps,
       events,
+      sourceLimitTrace,
       sources,
       sourceVersions,
       evidence,

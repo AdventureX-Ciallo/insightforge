@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -65,6 +65,44 @@ test("engine rejects a run that would exceed the ten-source product boundary bef
     workspaceDir: await workspace("insightforge-source-limit-"),
     uploadedFiles,
   }), /SOURCE_LIMIT_EXCEEDED.*at most 10 sources.*at most 5 uploaded files/u);
+});
+
+test("COLLECT truncates an eleventh total source and persists the MAX_SOURCES trace", async () => {
+  const fixtureDir = await workspace("insightforge-eleventh-source-fixture-");
+  await cp(resolve("fixtures/golden"), fixtureDir, { recursive: true });
+  const indexPath = join(fixtureDir, "search-index.json");
+  const index = JSON.parse(await readFile(indexPath, "utf8")) as { sources: Array<Record<string, unknown>> };
+  for (let number = 4; number <= 9; number += 1) {
+    index.sources.push({
+      id: `source-web-extra-${number}`,
+      title: `额外候选信源 ${number}`,
+      url: `https://example.com/source-${number}`,
+      publisher: "截断测试来源",
+      publishedAt: "2026-08-28",
+      excerpt: `用于验证第 ${number} 个网页候选的硬上限。`,
+      contentType: "SOURCE_OPINION",
+    });
+  }
+  await writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
+
+  const run = await runGoldenCase({
+    researchQuestion: "验证十一条候选信源是否被安全截断并留下机器记录？",
+    fixtureDir,
+    workspaceDir: await workspace("insightforge-eleventh-source-run-"),
+    llmMode: "off",
+  });
+
+  assert.equal(run.sources.length, 10);
+  assert.deepEqual(run.sourceLimitTrace, {
+    maxSources: 10,
+    discoveredCount: 11,
+    retainedCount: 10,
+    truncatedCount: 1,
+    truncated: true,
+    reason: "MAX_SOURCES",
+  });
+  assert.match(run.steps.find((step) => step.state === "COLLECT")!.summary, /MAX_SOURCES=10 已截断 1 个候选并留痕/u);
+  assert.equal(run.sources.some((source) => source.id === "source-web-extra-9"), false);
 });
 
 test("live PLAN and SYNTHESIZE reject invalid model programs without deterministic fallback", async () => {

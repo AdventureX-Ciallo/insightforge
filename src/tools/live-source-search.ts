@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
+import { MAX_SOURCES, truncateSources } from "../source-limit.js";
 import { validatePublicHttpUrl, type SearchResolver } from "./search-engines.js";
 
 const PROVIDER = "https://zh.wikipedia.org/w/api.php";
@@ -13,7 +14,7 @@ const responseSchema = z.object({
       title: z.string().min(1),
       snippet: z.string(),
       timestamp: z.string().optional(),
-    }).passthrough()).max(10),
+    }).passthrough()).max(100),
   }).passthrough(),
 }).passthrough();
 
@@ -54,6 +55,16 @@ export async function searchLiveSingleProvider(query: string, fetcher: LiveSearc
   const bytes = await limitedBytes(response);
   const payload = responseSchema.parse(JSON.parse(new TextDecoder().decode(bytes)) as unknown);
   const capturedAt = new Date().toISOString();
+  const discovered = payload.query.search.map((item) => ({
+    id: `live-wikipedia-${item.pageid}`,
+    title: item.title,
+    url: `https://zh.wikipedia.org/?curid=${item.pageid}`,
+    excerpt: stripMarkup(item.snippet),
+    publishedAt: item.timestamp ?? null,
+    materialRole: "CANDIDATE_SOURCE" as const,
+    authorityVerified: false,
+  }));
+  const limited = truncateSources(discovered, MAX_SOURCES);
   return {
     mode: "live-single-provider" as const,
     provider: "Chinese Wikipedia MediaWiki API",
@@ -61,14 +72,7 @@ export async function searchLiveSingleProvider(query: string, fetcher: LiveSearc
     query: normalized,
     capturedAt,
     responseSha256: createHash("sha256").update(bytes).digest("hex"),
-    results: payload.query.search.map((item) => ({
-      id: `live-wikipedia-${item.pageid}`,
-      title: item.title,
-      url: `https://zh.wikipedia.org/?curid=${item.pageid}`,
-      excerpt: stripMarkup(item.snippet),
-      publishedAt: item.timestamp ?? null,
-      materialRole: "CANDIDATE_SOURCE" as const,
-      authorityVerified: false,
-    })),
+    results: limited.items,
+    sourceLimitTrace: limited.trace,
   };
 }

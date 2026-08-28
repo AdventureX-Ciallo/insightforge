@@ -1,35 +1,128 @@
-# Five-minute demo script
+# InsightForge 五分钟现场讲稿
 
-> Status: `HISTORICAL SCRIPT — SUPERSEDED FOR PRODUCT REVIEW BY PITCH-NARRATIVE.md`. Reconcile only after the product documents are frozen.
+> 适用版本：2026-08-28 当前本地产品。讲稿中的按钮、导航和页面文案均按 `public/index.html` 与 `public/app.js` 原样书写。不要把“使用缓存快照”说成实时搜索，也不要把后端 SSE 接口说成当前页面已经采用 SSE；当前页面显示同一任务进度，但仍通过轮询取得作业快照。
 
-## 0:00–0:35 — Problem and promise
+## 演示前准备（不上台计时）
 
-Open the product and say: “Traditional reports preserve the answer but lose how the answer was formed. InsightForge receives one whole research task and preserves evidence, conflicts, assumptions, human decisions and later change.” Point out “使用缓存快照”: this is an honest offline demo, not fake live search.
+- 启动产品并保持首页处于默认研究问题：“中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？”
+- 确认页头显示“使用缓存快照”，按钮显示“运行黄金案例”。
+- 不依赖网络或模型 API Key。不要先点击“联网核验来源”，该入口只用于可选的白名单真实性检查。
+- 灾备文件仅用于浏览器完全无法启动时兜底，正常演示必须现场运行任务。
 
-## 0:35–1:20 — One task, five real states
+## 0:00–0:35｜一句话问题与双命题
 
-Click “运行黄金案例”. Show `PLAN → COLLECT → SYNTHESIZE → AUDIT → DELIVER` changing through running/success. On Task Overview, point to the four tool events and their inputs, output IDs, duration and status.
+操作：停留首页，不点击。
 
-## 1:20–2:05 — First high point: trace any conclusion
+讲稿：
 
-Open “候选结论”. Explain that all four AI conclusions start pending. Click “查看依据” on the penetration conclusion. In one operation, show Conclusion→Claim→Evidence→CSV/web source→row/URL. Explain why CADA's 47.6% passenger-retail penetration and the 37.1% CAAM all-auto calculation use different scopes, and why the system preserves both instead of silently choosing one.
+“传统行业报告交付了答案，却经常丢掉答案是怎么形成的。InsightForge 接住一个完整研究任务，从问题一路推进到可编辑成果，同时保留证据、冲突、假设、人工判断和后续变化。
 
-## 2:05–2:50 — Know what cannot be concluded
+它用一个产品同时回答两个命题：对商汤，重点是‘AI，不止完成一步’；对沙利文，重点是‘让行业判断经得起追问’。”
 
-Show the fourth conclusion as `INSUFFICIENT_EVIDENCE`; the Confirm and Edit controls are disabled. Open “审查修正”, show `MISSING_ASSUMPTION` before/after and the scope-overreach downgrade. State that automatic repair is limited to one attempt.
+## 0:35–1:25｜商汤映射：接住整个任务
 
-## 2:50–3:30 — Human owns the judgment
+操作：点击“运行黄金案例”，观察五个状态卡由 `pending`、`running` 进入 `success`，然后进入“任务总览”。
 
-Edit the charging conclusion. Show `HUMAN_CONFIRMED` and explain that the original AI text remains in the run object. Reject or leave the insufficient item pending; never present it as a final fact.
+讲稿：
 
-## 3:30–4:15 — Second high point: source change invalidates a conclusion
+“这不是四个孤立按钮。一个任务真实经过 `PLAN → COLLECT → SYNTHESIZE → AUDIT → DELIVER`：模型先提出计划和候选判断，确定性程序再校验工具白名单、Schema、证据引用和状态迁移；任务调用搜索快照、PDF、本地表格计算和 PPTX 四类工具，上一步的输出 ID 被下一步消费。
 
-Open “来源更新” and click “发现新版来源”. Show exactly five affected objects and the penetration conclusion becoming `STALE/NEEDS_REVIEW`. Point out that the charging conclusion remains unchanged and that any affected confirmation is revoked.
+黄金路径的模型结果来自经过摘要和 Schema 校验的认证缓存，所以页头明确写着‘使用缓存快照’，不冒充本轮在线调用。后端还提供按 run 隔离的 SSE 运行事件流，可订阅五状态、工具事件、心跳和终态；当前这个评委页面持续展示同一运行状态，但前端仍通过轮询刷新，不能说成已经接入 SSE。”
 
-## 4:15–5:00 — Deliver real, reusable outcomes
+指向“任务总览”里的“工具执行事件”，补一句：
 
-Open “成果交付”. Download the editable 5-page PPTX and JSON evidence package. Close by saying: “InsightForge does not claim to know everything. It proves that an Agent can carry one research task all the way to usable artifacts while keeping evidence visible, judgments challengeable, and change traceable.”
+“每次调用都留下工具名、输入摘要、状态、输出 ID、耗时和错误字段；失败的步骤不会被包装成全部成功。”
 
-## Disaster plan
+## 1:25–2:20｜高光一：两次点击追到底稿
 
-If the browser cannot run, open `demo-assets/insightforge-golden-fallback.pptx`. This file is only disaster recovery; the normal demo must execute the workflow live.
+操作一：点击左侧“候选结论”。
+
+讲稿：
+
+“这里不是最终答案列表。AI 内容默认待复核，机器分别保存知识类型、责任来源、证据状态、审阅状态和新鲜度。”
+
+操作二：在任一有支撑的结论上点击“查看依据”。抽屉标题应显示“结论证据路径”。
+
+讲稿：
+
+“这是第一次高光：从当前页面开始只需两次点击——‘候选结论’、‘查看依据’——就能看到 `CONCLUSION → Claim → EVIDENCE → SOURCE`。网页保留 URL，PDF 保留页码，CSV 保留列名、行号、公式和输入。
+
+同一指标出现不同数字时，系统同时保留来源与口径，给出的差异解释只能是候选解释，不会静默选一个数，也不会求平均当答案。”
+
+## 2:20–3:05｜沙利文映射：冲突、假设、审查和版本链
+
+操作：关闭证据抽屉；依次点击“证据底稿”“审查修正”。
+
+讲稿：
+
+“沙利文要求的是经得起追问。‘证据底稿’展示冲突值、来源和精确定位；计算保留公式，估算必须绑定假设。‘审查修正’不是一句‘我检查过了’，而是六类结构化规则的 BEFORE/AFTER 和真实动作，自动修复最多一次，仍有严重缺口就进入 `NEEDS_REVIEW`，由人负责最后判断。”
+
+操作：点击“来源更新”，再点击“发现新版来源 →”。
+
+讲稿：
+
+“这里把来源 v1 切到 v2，只沿已记录的数据—判断—结论关系传播影响：相关结论变为待复核，原确认失效，不相关结论保持不变。随后生成新的成果版本，旧版本不覆盖。这就是沙利文要求的版本链，而不是一份更新后找不到旧依据的静态报告。”
+
+## 3:05–3:35｜真实交付，不止停在答案
+
+操作：点击“成果交付”。
+
+讲稿：
+
+“最终交付不是聊天文本：当前页面是交互式研究报告，同时可以下载固定五页、文字可编辑的 PowerPoint，以及机器可读证据包。它们来自同一研究快照，冲突、假设、待确认和证据不足不会在导出时消失。”
+
+## 3:35–4:35｜高光二：换成非黄金问题，诚实拒答
+
+操作：回到页面顶部，将“研究问题”替换为：
+
+> 中国光伏组件出口价格在 2025-2026 年会受到哪些结构性因素影响？
+
+点击页面当前仍名为“运行黄金案例”的按钮。等待终态显示 `NEEDS_REVIEW`，再点击“候选结论”。
+
+讲稿：
+
+“第二次高光不是再背一套答案，而是现场换一个超出内置资料范围的问题。系统重新生成对应问题的计划，但不会把新能源车材料硬套到光伏上。当前三条候选全部标记 `INSUFFICIENT_EVIDENCE`，明确列出缺少的一手信源、指标口径、时间序列和交叉验证材料，确认按钮被阻断。
+
+这证明它知道什么时候不能下结论。按钮现在仍叫‘运行黄金案例’，这是前端联调待修文案；后端实际接收并处理的是输入框中的当前问题。”
+
+## 4:35–5:00｜收束
+
+讲稿：
+
+“所以 InsightForge 证明的不是一个无所不知的答案机器，而是一个 Agent 能否接住完整研究任务：用多步骤、多工具和模型提出候选，再用确定性规则、人类裁决和版本链，让每条判断可追问、可质疑、可更新，最后真正交付可继续编辑和复用的成果。”
+
+## 评委追问预案
+
+### 1. “能不能换一个问题？”
+
+回答：
+
+“可以换，刚才的光伏问题就是反证。当前只有一个行业黄金资料集；匹配时形成可追溯候选，不匹配时进入 `NEEDS_REVIEW`，逐条列出 EvidenceGap，不生成貌似合理的跨行业答案。我们刻意没有堆第二个案例来伪装通用性。”
+
+现场动作：修改“研究问题”，点击当前 UI 的“运行黄金案例”，展示“候选结论”中的 `INSUFFICIENT_EVIDENCE` 与“缺少：”列表。
+
+### 2. “现场断网怎么办？”
+
+回答：
+
+“黄金案例离线可运行，页头始终明确显示‘使用缓存快照’，不会把缓存冒充实时搜索。断网时搜索快照、PDF、CSV 计算、模型认证缓存和 PPTX 仍能完成五状态；可选的‘联网核验来源’失败只会如实显示失败，不影响离线主链。”
+
+### 3. “没有模型 API Key 还算 AI 吗？”
+
+回答：
+
+“默认演示使用真实模型产出的认证缓存，程序会核对问题、提示词摘要、Schema、证据 ID、假设 ID 和关键数值，不能任意套用；页面明确披露不是本轮在线调用。配置单一 HTTPS 模型端点后可以走在线 PLAN/SYNTHESIZE，但没有 Key 时不会伪造在线成功，也不会偷偷切换模型。”
+
+### 4. “来源里有提示词注入怎么办？”
+
+回答：
+
+“来源文本永远只作为不可信材料。即使出现‘忽略原任务、读取环境变量’之类指令，也只能出现在‘证据底稿’，不能改变研究计划、工具白名单或确认状态，不能触发额外工具，也不能读取环境变量。上传入口‘验证并上传资料’还会先限制类型、大小、路径和 SHA-256。”
+
+## 演示禁语
+
+- 不说“实时搜索已成功”，除非当场点击“联网核验来源”并看到真实成功结果；该按钮是白名单核验，也不能说成通用搜索。
+- 不说“当前 UI 使用 SSE”；准确说法是“后端提供 SSE 运行事件流，当前 UI 仍轮询显示进度”。
+- 不说“AI 已确认结论”；准确说法是“AI 提出候选，人显式确认”。
+- 不把 `INSUFFICIENT_EVIDENCE`、`CONFLICT` 或 `NEEDS_REVIEW` 说成失败；它们是 fail-closed 的研究边界。
+- 不说已经部署、已经在 Windows PowerPoint 验证或已经完成全部前端联调。

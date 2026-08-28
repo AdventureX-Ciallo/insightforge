@@ -39,6 +39,7 @@ function packageFor(run: ResearchRun) {
     synthesisMode: run.synthesisMode,
     sourceDiscoveryMode: run.sourceDiscoveryMode,
     authorityVerificationMode: run.authorityVerificationMode,
+    sourceLimitTrace: run.sourceLimitTrace,
     sources: run.sources,
     sourceVersions: run.sourceVersions,
     evidence: run.evidence,
