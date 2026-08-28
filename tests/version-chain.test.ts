@@ -85,6 +85,37 @@ test("artifact version APIs preserve immutable delivery, source, and trigger sna
     assert.equal(detail.status, 200);
     assert.deepEqual(await detail.json(), v1Before);
     assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifact-versions/999`)).status, 404);
+
+    let sixthDecisionRun: {
+      humanDecisions: unknown[];
+      artifactVersions: Array<{ version: number }>;
+      artifactHistory: Array<{ version: number }>;
+      evictedArtifactVersionCount: number;
+    } | undefined;
+    for (let decisionNumber = 3; decisionNumber <= 6; decisionNumber += 1) {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/decisions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          conclusionId: "conclusion-charging-growth",
+          action: "REJECT",
+          reason: `滚动窗口测试中的第 ${decisionNumber} 次人工决定`,
+        }),
+      });
+      assert.equal(response.status, 200);
+      sixthDecisionRun = (await response.json() as { run: typeof sixthDecisionRun }).run;
+    }
+    assert.ok(sixthDecisionRun);
+    assert.equal(sixthDecisionRun.humanDecisions.length, 6);
+    assert.deepEqual(sixthDecisionRun.artifactVersions.map((item) => item.version), [4, 5, 6, 7, 8]);
+    assert.equal(sixthDecisionRun.artifactHistory.length, 16);
+    assert.equal(sixthDecisionRun.evictedArtifactVersionCount, 3);
+
+    const rolled = await fetch(`${baseUrl}/api/runs/${runId}/artifact-versions`);
+    const retainedVersions = await rolled.json() as Array<{ version: number }>;
+    assert.deepEqual(retainedVersions.map((item) => item.version), [4, 5, 6, 7, 8]);
+    assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifact-versions/1`)).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifacts/PPTX?version=1`)).status, 404);
   } finally {
     await app.stop();
   }

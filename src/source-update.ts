@@ -1,33 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-
 import { persistRun, writeArtifactVersion } from "./artifacts.js";
 import { researchRunSchema, type ResearchRun } from "./domain.js";
 import { hashFile, hashValue } from "./hash.js";
+import { GOLDEN_RESEARCH_QUESTION } from "./model-cache.js";
 import { applySourceConfidence } from "./source-confidence.js";
 import { calculateMarketMetrics } from "./tools/csv-calculator.js";
-
 export interface SourceUpdateOptions {
   fixtureDir: string;
   workspaceDir: string;
 }
-
+export const GOLDEN_SOURCE_UPDATE_ONLY_MESSAGE = "来源更新仅适用于内置黄金案例的 v1→v2 演示";
+export class SourceUpdateError extends Error {
+  readonly statusCode = 422;
+}
 /** 内置确定性 v1→v2：保留旧 SourceVersion/ArtifactVersion，只让依赖链上的对象失效。 */
 export async function applySourceUpdate(current: ResearchRun, options: SourceUpdateOptions): Promise<ResearchRun> {
-  if (current.sourceVersion !== "v1") throw new Error("The golden source update can only be applied once");
+  if (current.researchQuestion !== GOLDEN_RESEARCH_QUESTION) throw new SourceUpdateError(GOLDEN_SOURCE_UPDATE_ONLY_MESSAGE);
+  if (current.sourceVersion === "v2") return current;
   const run = structuredClone(current);
   const csvPath = resolve(options.fixtureDir, "market_v2.csv");
   const metrics = await calculateMarketMetrics(csvPath);
   const now = new Date().toISOString();
   const updateId = `source-update-${randomUUID()}`;
-
   const source = run.sources.find((item) => item.id === "source-market-csv");
   const evidence = run.evidence.find((item) => item.id === "evidence-market-csv");
   const datum = run.data.find((item) => item.id === "datum-penetration");
   const claim = run.claims.find((item) => item.id === "claim-penetration");
   const conclusion = run.conclusions.find((item) => item.id === "conclusion-penetration");
   if (!source || !evidence || !datum || !claim || !conclusion) throw new Error("Source dependency chain is incomplete");
-
   const oldVersion = run.sourceVersions.find((item) => item.id === source.sourceVersionId);
   if (oldVersion) oldVersion.isCurrent = false;
   const v2VersionId = "source-version-market-csv-v2";
@@ -48,7 +49,6 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
   source.capturedAt = now;
   source.excerpt = "2023,9.495,30.094,2.726\n2024,12.866,31.436,3.579";
   source.freshness = "CURRENT";
-
   evidence.excerpt = `2024 penetration = ${metrics.penetration.toFixed(4)}%; charger growth = ${metrics.chargerGrowth.toFixed(4)}%`;
   evidence.locator = source.locator;
   evidence.freshness = "CURRENT";
@@ -56,7 +56,6 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
   datum.metric = "2024 新能源汽车新车销量占比（最终输入重算）";
   datum.inputs = [{ label: "新能源汽车最终销量", value: 12.866, unit: "百万辆" }, { label: "汽车最终总销量", value: 31.436, unit: "百万辆" }];
   datum.freshness = "CURRENT";
-
   claim.text = `来源更新：全汽车最终销量口径重算为 ${metrics.penetration.toFixed(1)}%，原预测输入对应判断已失效；与乘用车国内零售 47.6% 仍属不同口径。`;
   claim.originalText = claim.originalText;
   claim.evidenceStatus = "STALE";

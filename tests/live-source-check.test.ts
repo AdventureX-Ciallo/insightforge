@@ -42,13 +42,15 @@ test("HTTP 200 challenge pages are not misreported as verified authority content
 
 function withUrl(response: Response, url: string) {
   Object.defineProperty(response, "url", { value: url });
+  Object.defineProperty(response, "redirected", { value: true });
   return response;
 }
 
 test("authority checks fail closed for every HTTP envelope, size, redirect, marker, and non-Error failure", async () => {
   const cases: Array<{ response: () => Promise<Response>; pattern: RegExp }> = [
     { response: async () => new Response("down", { status: 503 }), pattern: /HTTP 503/u },
-    { response: async () => withUrl(new Response("body", { headers: { "content-type": "text/html" } }), "https://evil.example/"), pattern: /authority allowlist/u },
+    { response: async () => new Response("down", { status: 302 }), pattern: /HTTP 302/u },
+    { response: async () => withUrl(new Response("body", { headers: { "content-type": "text/html" } }), "https://authority.example/final"), pattern: /unexpected redirect/iu },
     { response: async () => new Response("body", { headers: { "content-type": "application/json" } }), pattern: /content type/u },
     { response: async () => new Response("", { headers: { "content-type": "text/html", "content-length": String(512 * 1024 + 1) } }), pattern: /safety limit/u },
     { response: async () => new Response(Buffer.alloc(512 * 1024 + 1), { headers: { "content-type": "text/html" } }), pattern: /safety limit/u },
@@ -70,4 +72,16 @@ test("authority checks fail closed for every HTTP envelope, size, redirect, mark
     headers: { "content-type": "text/html", "content-length": "not-a-number" },
   }));
   assert.ok(valid.results.every((result) => result.status === "verified"));
+});
+
+test("outbound authority requests are configured to fail closed on redirects before any hop is followed (#1)", async () => {
+  const seenInits: Array<RequestInit | undefined> = [];
+  await checkLiveSources(async (_input, init) => {
+    seenInits.push(init);
+    throw new Error("offline");
+  });
+  assert.ok(seenInits.length > 0);
+  for (const init of seenInits) {
+    assert.equal(init?.redirect, "error", "authority fetch must never follow redirects");
+  }
 });

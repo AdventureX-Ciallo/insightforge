@@ -54,17 +54,18 @@ async function readLimited(response: Response) {
 
 export async function checkLiveSources(fetcher: AuthorityFetcher = fetch) {
   const checkedAt = new Date().toISOString();
-  const allowedHosts = new Set(AUTHORITY_SOURCES.map((source) => new URL(source.url).hostname));
   const results = await Promise.all(AUTHORITY_SOURCES.map(async (source) => {
     try {
+      // redirect:"error" 在建立任何中间连接之前 fail-closed：undici 的 "follow" 会先对每个
+      // 重定向目标建立真实 TCP/TLS 连接，事后校验 response.url 属于盲 SSRF（#1）。
       const response = await fetcher(source.url, {
         method: "GET",
-        redirect: "follow",
+        redirect: "error",
         headers: { accept: "text/html,application/xhtml+xml" },
         signal: AbortSignal.timeout(8_000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (response.url && !allowedHosts.has(new URL(response.url).hostname)) throw new Error("Redirect left the authority allowlist");
+      if (response.redirected) throw new Error("Unexpected redirect");
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
       if (contentType && !contentType.includes("text/html")) throw new Error("Unexpected content type");
       const bytes = await readLimited(response);

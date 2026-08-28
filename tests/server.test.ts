@@ -236,13 +236,18 @@ test("server restores a complete persisted run and rejects forged or incomplete 
   const { runId } = await create.json() as { runId: string };
   await waitForRun(writerUrl, runId);
   await writer.stop();
+  const legacyRun = JSON.parse(await readFile(join(workspaceDir, "current.json"), "utf8")) as { evictedArtifactVersionCount?: number };
+  delete legacyRun.evictedArtifactVersionCount;
+  await writeFile(join(workspaceDir, "current.json"), JSON.stringify(legacyRun), "utf8");
 
   const reader = createInsightForgeServer(options);
   const readerUrl = await reader.start(0, "127.0.0.1");
   try {
     const current = await fetch(`${readerUrl}/api/current`);
     assert.equal(current.status, 200);
-    assert.equal(((await current.json()) as { run: { id: string } }).run.id, runId);
+    const restored = (await current.json()) as { run: { id: string; evictedArtifactVersionCount: number } };
+    assert.equal(restored.run.id, runId);
+    assert.equal(restored.run.evictedArtifactVersionCount, 0);
   } finally {
     await reader.stop();
   }

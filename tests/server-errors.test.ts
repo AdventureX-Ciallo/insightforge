@@ -86,6 +86,7 @@ test("request readers reject malformed, non-object, oversized, empty, and unsafe
     "application/octet-stream",
   ]);
   assert.deepEqual(publicHttpError("secret internal error"), { status: 500, message: "Request failed" });
+  assert.deepEqual(publicHttpError(new Error("specific failure")), { status: 500, message: "specific failure" });
 
   const publicDir = resolve("public");
   assert.equal(staticFilePath(publicDir, "/"), join(publicDir, "index.html"));
@@ -180,9 +181,29 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
     assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifacts/PPTX?version=999`)).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifact-versions/999`)).status, 404);
 
-    const firstUpdate = await fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" });
+    const [firstUpdate, duplicateUpdate] = await Promise.all([
+      fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" }),
+      fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" }),
+    ]);
     assert.equal(firstUpdate.status, 200);
-    assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" })).status, 500);
+    assert.equal(duplicateUpdate.status, 200);
+    const firstUpdatedRun = (await firstUpdate.json() as { run: { sourceVersion: string; artifactVersions: unknown[] } }).run;
+    const duplicateUpdatedRun = (await duplicateUpdate.json() as { run: { sourceVersion: string; artifactVersions: unknown[] } }).run;
+    assert.equal(firstUpdatedRun.sourceVersion, "v2");
+    assert.equal(duplicateUpdatedRun.sourceVersion, "v2");
+    assert.equal(duplicateUpdatedRun.artifactVersions.length, firstUpdatedRun.artifactVersions.length);
+
+    const mismatchCreated = await fetch(`${baseUrl}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ researchQuestion: "中国光伏组件出口价格在 2025-2026 年会受到哪些结构性因素影响？" }),
+    });
+    assert.equal(mismatchCreated.status, 202);
+    const mismatchRunId = (await mismatchCreated.json() as { runId: string }).runId;
+    await waitForRun(baseUrl, mismatchRunId);
+    const mismatchUpdate = await fetch(`${baseUrl}/api/runs/${mismatchRunId}/source-update`, { method: "POST" });
+    assert.equal(mismatchUpdate.status, 422);
+    assert.deepEqual(await mismatchUpdate.json(), { error: "来源更新仅适用于内置黄金案例的 v1→v2 演示" });
 
     for (const file of ["/", "/styles.css", "/app.js"]) assert.equal((await fetch(`${baseUrl}${file}`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/missing.css`)).status, 404);

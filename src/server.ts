@@ -9,7 +9,7 @@ import { researchRunSchema, workflowStates, type ArtifactVersion, type ResearchR
 import { buildBoundaryQuestions } from "./boundary-questions.js";
 import { MAX_RUN_SOURCES, MAX_RUN_UPLOADS, runGoldenCase, type CollectedUploadInput } from "./engine.js";
 import { applyHumanDecisionAndPersist, type HumanDecisionInput } from "./human-decision.js";
-import { applySourceUpdate } from "./source-update.js";
+import { applySourceUpdate, SourceUpdateError } from "./source-update.js";
 import { loadApiLlmSettings, publicLlmSettings, saveApiLlmSettings, SettingsStoreError } from "./settings-store.js";
 import { researchPresets } from "./presets.js";
 import { checkLiveSources, type AuthorityFetcher } from "./tools/live-source-check.js";
@@ -192,8 +192,9 @@ export function publicHttpError(error: unknown) {
     return { status: error.statusCode, message: error.message };
   }
   if (error instanceof SettingsStoreError) return { status: error.statusCode, message: error.message };
+  if (error instanceof SourceUpdateError) return { status: error.statusCode, message: error.message };
   if (error instanceof Error && error.message === FAKE_IP_PROXY_ERROR) return { status: 503, message: FAKE_IP_PROXY_ERROR };
-  return { status: 500, message: "Request failed" };
+  return { status: 500, message: error instanceof Error ? error.message : "Request failed" };
 }
 
 export function inside(root: string, path: string) {
@@ -239,6 +240,9 @@ export function settleServerClose(
 
 export function createInsightForgeServer(options: ServerOptions) {
   const jobs = new Map<string, Job>();
+  // CSRF 令牌（#2 第二层，INSIGHTFORGE_CSRF=1 时启用）：每进程随机，前端经 GET /api/csrf
+  // 同源获取后在状态变更请求携带 x-insightforge-csrf 头。默认关闭以兼容联调期前端。
+  const csrfToken = randomUUID();
   const eventSubscribers = new Map<string, Set<RunEventSubscriber>>();
   const runMutationQueues = new Map<string, Promise<void>>();
   const searchFetcher = options.searchFetcher ?? fetch;
@@ -346,10 +350,59 @@ export function createInsightForgeServer(options: ServerOptions) {
     }
   }
 
+  // CSRF/BOPLA 防护（#2）：本服务无 cookie/会话，浏览器面攻击 = 任意网页向 loopback 发跨源
+  // 简单 POST（text/plain 免预检）。非浏览器客户端（测试/curl/联调脚本）不发 Origin 头，不受影响。
+  // DNS 重绑定（#3）的 Origin 是攻击者域名，同样被此校验拦截。
+  function isLoopbackOrigin(origin: string): boolean {
+    try {
+      return LOOPBACK_HOSTS.has(new URL(origin).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  function rejectCrossOriginBrowserRequest(request: IncomingMessage): string | null {
+    const origin = request.headers.origin;
+    if (Array.isArray(origin)) return "Malformed Origin header";
+    if (origin !== undefined && !isLoopbackOrigin(origin)) return `Cross-origin request rejected (Origin: ${origin})`;
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (fetchSite !== undefined && fetchSite !== "same-origin" && fetchSite !== "none") {
+      return `Cross-site request rejected (Sec-Fetch-Site: ${fetchSite})`;
+    }
+    return null;
+  }
+
+  // DNS 重绑定防护（#3）：攻击域短 TTL 重绑到 127.0.0.1 后，Origin 与页面同源、绕过 CORS 直读
+  // loopback 数据。Host 头必须是回环主机名（允许带端口与 IPv6 方括号形式），其余一律 403。
+  function isLoopbackHostHeader(host: string | undefined): boolean {
+    if (!host) return false;
+    const bare = host.startsWith("[") ? (host.slice(1, host.indexOf("]") !== -1 ? host.indexOf("]") : host.length)) : host.split(":")[0]!;
+    return LOOPBACK_HOSTS.has(bare);
+  }
+
   async function route(request: IncomingMessage, response: ServerResponse) {
     try {
       const url = new URL(request.url!, "http://localhost");
       const method = request.method!;
+      if (!isLoopbackHostHeader(request.headers.host)) {
+        sendJson(response, 403, { error: `Host header rejected (Host: ${request.headers.host ?? "absent"})` });
+        return;
+      }
+      if (method !== "GET" && method !== "HEAD") {
+        const rejection = rejectCrossOriginBrowserRequest(request);
+        if (rejection) {
+          sendJson(response, 403, { error: rejection });
+          return;
+        }
+        if (process.env.INSIGHTFORGE_CSRF === "1" && request.headers["x-insightforge-csrf"] !== csrfToken) {
+          sendJson(response, 403, { error: "Missing or invalid CSRF token (x-insightforge-csrf)" });
+          return;
+        }
+      }
+      if (method === "GET" && url.pathname === "/api/csrf") {
+        sendJson(response, 200, { token: csrfToken, required: process.env.INSIGHTFORGE_CSRF === "1" });
+        return;
+      }
       if (method === "GET" && url.pathname === "/api/health") {
         sendJson(response, 200, { ok: true, offlineDemo: true, defaultSynthesisMode: "CACHED_MODEL_OUTPUT" });
         return;

@@ -321,6 +321,7 @@ export interface ArtifactVersion {
   supersedesId: string | null;
 }
 
+export const MAX_ARTIFACT_VERSIONS = 5 as const;
 export interface ModelProvenance {
   planSource: "CACHED_MODEL_OUTPUT" | "LIVE_SINGLE_ENDPOINT" | "DETERMINISTIC_MISMATCH_BLOCK";
   synthesisSource: "CACHED_MODEL_OUTPUT" | "LIVE_SINGLE_ENDPOINT" | "DETERMINISTIC_MISMATCH_BLOCK";
@@ -374,6 +375,7 @@ export interface ResearchRun {
   artifacts: ArtifactRecord[];
   artifactHistory: ArtifactRecord[];
   artifactVersions: ArtifactVersion[];
+  evictedArtifactVersionCount: number;
   affectedObjectIds: string[];
   researchSnapshotId: string;
   uploadedFileIds: string[];
@@ -686,7 +688,7 @@ export const evidencePackageSchema = z.object({
   candidateRevisions: z.array(candidateRevisionSchema).min(3),
   auditFindings: z.array(auditFindingSchema),
   humanDecisions: z.array(humanDecisionSchema),
-  artifactVersions: z.array(artifactVersionSchema),
+  artifactVersions: z.array(artifactVersionSchema).max(MAX_ARTIFACT_VERSIONS),
   researchSnapshotId: z.string().min(1),
   modelProvenance: modelProvenanceSchema,
   artifacts: z.array(z.object({
@@ -734,7 +736,8 @@ const researchRunObjectSchema = z.object({
   humanDecisions: z.array(humanDecisionSchema),
   artifacts: z.array(artifactRecordSchema),
   artifactHistory: z.array(artifactRecordSchema),
-  artifactVersions: z.array(artifactVersionSchema),
+  artifactVersions: z.array(artifactVersionSchema).max(MAX_ARTIFACT_VERSIONS),
+  evictedArtifactVersionCount: z.number().int().nonnegative().default(0),
   affectedObjectIds: z.array(z.string()),
   researchSnapshotId: z.string().min(1),
   uploadedFileIds: z.array(z.string()),
@@ -750,7 +753,8 @@ function graphIssue(ctx: z.RefinementCtx, path: Array<string | number>, message:
 }
 
 /** Schema 锁不只验证字段形状，也验证证据图引用、人工边界与当前版本唯一性。 */
-export const researchRunSchema: z.ZodType<ResearchRun> = researchRunObjectSchema.superRefine((run, ctx) => {
+type ResearchRunSchemaInput = Omit<ResearchRun, "evictedArtifactVersionCount"> & { evictedArtifactVersionCount?: number | undefined };
+export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRunSchemaInput> = researchRunObjectSchema.superRefine((run, ctx) => {
   const collections: Array<[string, Array<{ id: string }>]> = [
     ["sources", run.sources], ["sourceVersions", run.sourceVersions], ["evidence", run.evidence], ["data", run.data],
     ["assumptions", run.assumptions], ["claims", run.claims], ["evidenceGaps", run.evidenceGaps],

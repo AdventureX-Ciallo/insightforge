@@ -1,8 +1,8 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
-
 import {
   evidencePackageSchema,
+  MAX_ARTIFACT_VERSIONS,
   type ArtifactRecord,
   type ArtifactVersion,
   type ResearchRun,
@@ -10,12 +10,10 @@ import {
 import { hashFile, hashValue } from "./hash.js";
 import { writePptx } from "./tools/pptx-export.js";
 import { writeMarkdownReport, writePdfReport } from "./tools/report-export.js";
-
 function assertInside(root: string, target: string) {
   const rel = relative(resolve(root), resolve(target));
   if (!rel || rel === ".." || rel.startsWith("../")) throw new Error("Artifact path is outside the allowed workspace");
 }
-
 export function computeResearchSnapshotId(run: ResearchRun): string {
   return hashValue({
     researchQuestion: run.researchQuestion,
@@ -31,7 +29,6 @@ export function computeResearchSnapshotId(run: ResearchRun): string {
     humanDecisions: run.humanDecisions,
   });
 }
-
 function packageFor(run: ResearchRun) {
   return evidencePackageSchema.parse({
     schemaVersion: run.schemaVersion,
@@ -57,12 +54,10 @@ function packageFor(run: ResearchRun) {
     artifacts: [...run.artifacts, ...run.artifactHistory].map((item) => ({ kind: item.kind, fileName: item.fileName })),
   });
 }
-
 async function record(path: string, kind: ArtifactRecord["kind"], version: number, id: string): Promise<ArtifactRecord> {
   const info = await stat(path);
   return { id, kind, path, sha256: await hashFile(path), sizeBytes: info.size, fileName: basename(path), version };
 }
-
 /** 每次可见状态变化均新增不可覆盖版本；run.artifacts 当前版本在前，历史版本随后保留。 */
 export async function writeArtifactVersion(
   run: ResearchRun,
@@ -74,7 +69,6 @@ export async function writeArtifactVersion(
   const versionDir = join(resolve(workspaceDir), run.id, "artifacts", `v${version}`);
   assertInside(workspaceDir, versionDir);
   await mkdir(versionDir, { recursive: true });
-
   for (const item of run.artifactVersions) if (item.status === "CURRENT") item.status = "SUPERSEDED";
   const previous = [...run.artifactVersions].sort((a, b) => b.version - a.version)[0] ?? null;
   run.researchSnapshotId = computeResearchSnapshotId(run);
@@ -102,10 +96,12 @@ export async function writeArtifactVersion(
     supersedesId: previous?.id ?? null,
   };
   run.artifactVersions.push(artifactVersion);
-
+  const evictedVersions = run.artifactVersions.sort((left, right) => left.version - right.version).splice(0, Math.max(0, run.artifactVersions.length - MAX_ARTIFACT_VERSIONS));
+  const evictedVersionNumbers = new Set(evictedVersions.map((item) => item.version));
+  run.evictedArtifactVersionCount += evictedVersions.length;
   await writePptx(run, pptxPath);
   // 当前版本先以稳定文件名进入包；文件字节哈希由外层 ArtifactRecord 记录，避免 JSON 自哈希递归。
-  const historical = [...run.artifacts, ...run.artifactHistory];
+  const historical = [...run.artifacts, ...run.artifactHistory].filter((item) => !evictedVersionNumbers.has(item.version));
   run.artifactHistory = historical;
   run.artifacts = [
     { id: pptxId, kind: "PPTX", path: pptxPath, sha256: "0".repeat(64), sizeBytes: 1, fileName: basename(pptxPath), version },
@@ -125,7 +121,6 @@ export async function writeArtifactVersion(
   run.artifacts = current;
   return current;
 }
-
 export async function persistRun(run: ResearchRun, workspaceDir: string) {
   const runDir = join(resolve(workspaceDir), run.id);
   assertInside(workspaceDir, runDir);

@@ -402,6 +402,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       artifacts: [],
       artifactHistory: [],
       artifactVersions: [],
+      evictedArtifactVersionCount: 0,
       affectedObjectIds: [],
       researchSnapshotId: sourceSnapshotId,
       uploadedFileIds: (options.uploadedFiles ?? []).map((item) => item.id),
