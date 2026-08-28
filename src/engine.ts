@@ -379,8 +379,10 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       synthesisMode,
       sourceDiscoveryMode: "OFFLINE_SNAPSHOT",
       authorityVerificationMode: "NOT_RUN",
-      offlineMode: true,
-      offlineModeLabel: "使用缓存快照",
+      // 溯源诚实（#4）：离线标签只在真正的离线综合模式下成立；LIVE_SINGLE_ENDPOINT
+      // 运行不得自称"使用缓存快照"。
+      offlineMode: synthesisMode !== "LIVE_SINGLE_ENDPOINT",
+      offlineModeLabel: synthesisMode === "LIVE_SINGLE_ENDPOINT" ? "在线单一端点模型" : "使用缓存快照",
       repairAttempts,
       sourceVersion,
       plan,

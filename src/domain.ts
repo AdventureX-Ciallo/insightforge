@@ -352,8 +352,8 @@ export interface ResearchRun {
   synthesisMode: SynthesisMode;
   sourceDiscoveryMode: SourceDiscoveryMode;
   authorityVerificationMode: AuthorityVerificationMode;
-  offlineMode: true;
-  offlineModeLabel: "使用缓存快照";
+  offlineMode: boolean;
+  offlineModeLabel: string;
   repairAttempts: number;
   sourceVersion: "v1" | "v2";
   plan: ResearchPlan;
@@ -707,8 +707,8 @@ const researchRunObjectSchema = z.object({
   synthesisMode: z.enum(synthesisModes),
   sourceDiscoveryMode: z.enum(sourceDiscoveryModes),
   authorityVerificationMode: z.enum(authorityVerificationModes),
-  offlineMode: z.literal(true),
-  offlineModeLabel: z.literal("使用缓存快照"),
+  offlineMode: z.boolean(),
+  offlineModeLabel: z.string().min(1),
   repairAttempts: z.number().int().min(0).max(1),
   sourceVersion: z.enum(["v1", "v2"]),
   plan: researchPlanSchema,

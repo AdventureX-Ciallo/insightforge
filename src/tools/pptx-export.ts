@@ -56,7 +56,8 @@ function buildSlides(run: ResearchRun) {
   cover.text("PROOF OF INSIGHT", 1.1, 0.77, 4.6, 0.34, { size: 11, color: C.cyan, bold: true });
   cover.text(run.researchQuestion, 1.1, 1.32, 10.9, 1.55, { size: 30, color: C.white, bold: true });
   cover.text(`研究范围 · ${run.plan.scope}`, 1.1, 3.08, 10.9, 0.62, { size: 13, color: "C7D3DE", valign: "t" });
-  cover.text("离线黄金案例 · 使用缓存快照", 1.1, 5.95, 4.3, 0.36, { size: 12, color: C.amber, bold: true });
+  // 溯源诚实（#4）：封面模式标签跟随运行真实来源，不再硬编码离线文案。
+  cover.text(run.offlineMode ? `离线黄金案例 · ${run.offlineModeLabel}` : `在线单一端点 · ${run.offlineModeLabel}`, 1.1, 5.95, 4.3, 0.36, { size: 12, color: C.amber, bold: true });
   cover.text("01", 12.05, 7.02, 0.55, 0.2, { size: 9, color: "9FB0C0", align: "r" });
   slides.push(cover);
 
