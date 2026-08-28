@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "noEmit": true,
+    "outDir": "./dist-fuzz",
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "tests/fuzz/**/*.ts"]
+}

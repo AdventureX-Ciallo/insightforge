@@ -116,7 +116,7 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
     assert.equal((await fetch(`${baseUrl}/api/current`)).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/sources/live-check`, { method: "POST" })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "新能源" }) })).status, 200);
-    assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: 1 }) })).status, 500);
+    assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: 1 }) })).status, 400);
 
     assert.equal((await fetch(`${baseUrl}/api/settings/llm`, { method: "POST", headers: { "content-type": "application/json" }, body: "{" })).status, 400);
     assert.equal((await fetch(`${baseUrl}/api/settings/llm`, { method: "POST", headers: { "content-type": "application/json" }, body: "[]" })).status, 400);

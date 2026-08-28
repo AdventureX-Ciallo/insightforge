@@ -6,9 +6,12 @@
 
 | 命令 | 结果 |
 |---|---|
-| `npm test` | PASS：91/91（85 个顶层测试，Path 1–6 矩阵含 6 个子测试） |
+| `npm test` | PASS：93/93（87 个顶层测试，Path 1–6 矩阵含 6 个子测试） |
 | `npm run coverage` | PASS：`src/**` 语句/分支/函数/行均 100% |
 | `npm run verify` | PASS：类型检查、100% 覆盖率门禁、生产构建、密钥扫描 |
+| `npm run fuzz` | PASS：seed `520628262`，六套累计 520,030 例；5,111 行源码对应 101.75 例/行；10.576 s |
+| `npm run fuzz:report` | PASS：同 seed 520,030 例，10.397 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
+| `NODE_ENV=test node --import tsx --test tests/sse.test.ts` | PASS：2/2；真实 ReadableStream、心跳、终态关流、断开清理与跨 run 隔离 |
 | `npm run test:e2e` | ENV BLOCKED：重试 2 次，Chromium 均在断言执行前因 `MachPortRendezvousServer … Permission denied (1100)` 退出；此前有 1/1 通过记录，但不作为本轮新鲜 PASS |
 | `npm run demo:triple` | PASS：3/3；400/113/106 ms，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
 | `npm run smoke` | PASS：生产构建服务、健康页与产品页 |
@@ -52,7 +55,22 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 | Path 5 交付 | 人工动作后重读 V1，并请求 V999 | V1 内容快照不变（仅 CURRENT→SUPERSEDED）；V999 返回 404 |
 | Path 6 更新 | DNS 同时返回公网与环回地址 | 搜索在 fetch 前拒绝，fetch 调用数为 0 |
 
-物理行统计口径为 `src/**/*.ts` 与 `tests/**/*.ts` 的 `wc -l`：生产 5,019 行，测试 3,095 行，测试/生产为 0.617:1（61.7%）。
+物理行统计口径为 `src/**/*.ts` 与 `tests/**/*.ts` 的 `wc -l`：生产 5,111 行，测试 3,814 行，测试/生产为 0.746:1（74.6%）。
+
+## P4 SSE 与随机测试证据
+
+- SSE：`GET /api/runs/:id/events` 返回 `text/event-stream`；真实 Node `fetch` 流消费看到了五阶段 running/success 迁移、工具事件、心跳与 terminal。两个并发 run 的每条 data 都携带各自 runId，未串流；主动 abort 后订阅数由 1 归零，原 run 仍完成且轮询端点返回完整 run；完成后重连会回放步骤/工具快照并立即终态关流。
+- seeded fuzz 默认根 seed 为 `520628262`，失败会打印 suite seed。机器报告记录各 suite 的派生 seed、用例数、耗时与不变量。
+
+| 随机套件 | 用例数 | 实测耗时 | 可证伪不变量摘要 |
+|---|---:|---:|---|
+| 引擎随机走查 | 30 | 1.088 s | 注入失败传播；终态三选一；步骤消费链不断 |
+| ResearchRun 结构模糊 | 150,000 | 5.401 s | 合法图通过；递归畸形、类型污染 fail-closed |
+| HTTP API 模糊 | 5,000 | 1.052 s | 随机方法/路径/长输入/编码/NUL 不返回 5xx；服务保持健康 |
+| 审计变质 | 100,000 | 0.905 s | 删引用降级；同期间异值冲突；数值/类型变化改变输出 |
+| 上传模糊 | 165,000 | 1.179 s | 白名单外与穿越拒绝；随机字节失败有类型；成功文件 0600 |
+| SSRF 随机 | 100,000 | 0.731 s | 保留段/环回/畸形目标全部拒绝；fetch 调用数始终为 0 |
+| **合计** | **520,030** | **10.397 s** | **目标 511,100；达到 101.75 例/源码行** |
 
 ## PPTX 独立验收
 

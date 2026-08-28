@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { researchRunSchema, workflowStates, type ArtifactVersion, type ResearchRun, type RunStep } from "./domain.js";
+import { researchRunSchema, workflowStates, type ArtifactVersion, type ResearchRun, type RunStep, type ToolCallEvent } from "./domain.js";
 import { buildBoundaryQuestions } from "./boundary-questions.js";
 import { runGoldenCase, type CollectedUploadInput } from "./engine.js";
 import { applyHumanDecisionAndPersist, type HumanDecisionInput } from "./human-decision.js";
@@ -31,7 +31,13 @@ interface Job {
   status: "running" | "completed" | "failed";
   steps: RunStep[];
   error: string | null;
+  events: ToolCallEvent[];
   run?: ResearchRun;
+}
+
+interface RunEventSubscriber {
+  response: ServerResponse;
+  heartbeat: ReturnType<typeof setInterval>;
 }
 
 function publicJob(job: Job) {
@@ -86,6 +92,7 @@ export interface ServerOptions {
   searchResolver?: SearchResolver;
   authorityFetcher?: AuthorityFetcher;
   legacySearchFetcher?: LiveSearchFetcher;
+  sseHeartbeatMs?: number;
 }
 
 function pendingSteps(): RunStep[] {
@@ -110,6 +117,10 @@ function sendJson(response: ServerResponse, status: number, value: unknown) {
     "x-content-type-options": "nosniff",
   });
   response.end(body);
+}
+
+export function formatSseEvent(event: "step" | "tool" | "terminal", value: unknown) {
+  return `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
 }
 
 export async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -227,14 +238,61 @@ export function settleServerClose(
 
 export function createInsightForgeServer(options: ServerOptions) {
   const jobs = new Map<string, Job>();
+  const eventSubscribers = new Map<string, Set<RunEventSubscriber>>();
   const searchFetcher = options.searchFetcher ?? fetch;
   const stepDelayMs = options.stepDelayMs ?? 120;
+  const sseHeartbeatMs = options.sseHeartbeatMs ?? 15_000;
   let currentRun: ResearchRun | undefined;
   let server: Server | undefined;
 
   async function persistJob(job: Job) {
     await mkdir(options.workspaceDir, { recursive: true });
     await writeFile(join(options.workspaceDir, `${job.runId}-progress.json`), `${JSON.stringify(job, null, 2)}\n`, "utf8");
+  }
+
+  function publishRunEvent(runId: string, event: "step" | "tool", value: unknown) {
+    const message = formatSseEvent(event, value);
+    for (const subscriber of eventSubscribers.get(runId) ?? []) subscriber.response.write(message);
+  }
+
+  function removeSubscriber(runId: string, subscriber: RunEventSubscriber) {
+    clearInterval(subscriber.heartbeat);
+    const subscribers = eventSubscribers.get(runId);
+    subscribers?.delete(subscriber);
+    if (subscribers?.size === 0) eventSubscribers.delete(runId);
+  }
+
+  function closeRunStreams(job: Job) {
+    const subscribers = [...(eventSubscribers.get(job.runId) ?? [])];
+    for (const subscriber of subscribers) {
+      removeSubscriber(job.runId, subscriber);
+      subscriber.response.end(formatSseEvent("terminal", { runId: job.runId, status: job.status, error: job.error }));
+    }
+  }
+
+  function openRunStream(request: IncomingMessage, response: ServerResponse, job: Job) {
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-content-type-options": "nosniff",
+    });
+    response.write(formatSseEvent("step", { runId: job.runId, steps: job.steps }));
+    for (const event of job.events) response.write(formatSseEvent("tool", { runId: job.runId, event }));
+    if (job.status !== "running") {
+      response.end(formatSseEvent("terminal", { runId: job.runId, status: job.status, error: job.error }));
+      return;
+    }
+    const subscriber: RunEventSubscriber = {
+      response,
+      heartbeat: setInterval(() => response.write(": heartbeat\n\n"), sseHeartbeatMs),
+    };
+    const subscribers = eventSubscribers.get(job.runId) ?? new Set<RunEventSubscriber>();
+    subscribers.add(subscriber);
+    eventSubscribers.set(job.runId, subscribers);
+    const cleanup = () => removeSubscriber(job.runId, subscriber);
+    request.once("aborted", cleanup);
+    response.once("close", cleanup);
   }
 
   async function startRun(runId: string, question: string, uploadedFiles: CollectedUploadInput[]) {
@@ -255,6 +313,12 @@ export function createInsightForgeServer(options: ServerOptions) {
         onProgress: async (steps) => {
           job.steps = steps;
           await persistJob(job);
+          publishRunEvent(runId, "step", { runId, steps });
+        },
+        onToolEvent: async (event) => {
+          job.events.push(event);
+          await persistJob(job);
+          publishRunEvent(runId, "tool", { runId, event });
         },
       });
       job.status = "completed";
@@ -263,11 +327,13 @@ export function createInsightForgeServer(options: ServerOptions) {
       currentRun = run;
       await persistJob(job);
       await writeFile(join(options.workspaceDir, "current.json"), `${JSON.stringify(run, null, 2)}\n`, "utf8");
+      closeRunStreams(job);
     } catch (error) {
       job.status = "failed";
       job.error = "Research run failed";
       job.steps = job.steps.map((step) => ({ ...step, error: step.error ? "Step failed" : null }));
       await persistJob(job);
+      closeRunStreams(job);
     }
   }
 
@@ -322,7 +388,11 @@ export function createInsightForgeServer(options: ServerOptions) {
       }
       if (method === "POST" && url.pathname === "/api/sources/live-search") {
         const body = await readJson(request);
-        const query = typeof body.query === "string" ? body.query : "";
+        const query = typeof body.query === "string" ? body.query.trim() : "";
+        if (query.length < 2 || query.length > 160) {
+          sendJson(response, 400, { error: "query must contain 2–160 characters" });
+          return;
+        }
         sendJson(response, 200, await searchLiveSingleProvider(query, options.legacySearchFetcher, options.searchResolver));
         return;
       }
@@ -360,11 +430,21 @@ export function createInsightForgeServer(options: ServerOptions) {
           uploadedFiles.push({ id: verified.id, kind: verified.kind, originalFileName: verified.originalFileName, path: resolve(options.workspaceDir, verified.storageKey), sha256: verified.sha256, uploadedAt: verified.uploadedAt });
         }
         const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
-        const job: Job = { runId, status: "running", steps: pendingSteps(), error: null };
+        const job: Job = { runId, status: "running", steps: pendingSteps(), error: null, events: [] };
         jobs.set(runId, job);
         await persistJob(job);
         void startRun(runId, researchQuestion, uploadedFiles);
         sendJson(response, 202, { runId, statusUrl: `/api/runs/${runId}` });
+        return;
+      }
+      const eventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
+      if (method === "GET" && eventsMatch?.[1]) {
+        const job = jobs.get(eventsMatch[1]);
+        if (!job) {
+          sendJson(response, 404, { error: "Run not found" });
+          return;
+        }
+        openRunStream(request, response, job);
         return;
       }
       const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
@@ -503,6 +583,9 @@ export function createInsightForgeServer(options: ServerOptions) {
   }
 
   return {
+    eventSubscriberCount(runId: string) {
+      return eventSubscribers.get(runId)?.size ?? 0;
+    },
     async start(port = 4399, host = "127.0.0.1") {
       if (!LOOPBACK_HOSTS.has(host)) {
         throw new Error("InsightForge is single-user software and only permits a loopback listener");
@@ -510,7 +593,7 @@ export function createInsightForgeServer(options: ServerOptions) {
       await mkdir(options.workspaceDir, { recursive: true });
       try {
         currentRun = researchRunSchema.parse(JSON.parse(await readFile(join(options.workspaceDir, "current.json"), "utf8")) as unknown);
-        jobs.set(currentRun.id, { runId: currentRun.id, status: "completed", steps: currentRun.steps, error: null, run: currentRun });
+        jobs.set(currentRun.id, { runId: currentRun.id, status: "completed", steps: currentRun.steps, error: null, events: currentRun.events, run: currentRun });
       } catch {
         currentRun = undefined;
       }

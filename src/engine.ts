@@ -59,6 +59,7 @@ export interface RunGoldenCaseOptions {
   llmConfig?: LlmConfig;
   uploadedFiles?: CollectedUploadInput[];
   onProgress?: (steps: RunStep[]) => void | Promise<void>;
+  onToolEvent?: (event: ToolCallEvent) => void | Promise<void>;
 }
 
 const isoNow = () => new Date().toISOString();
@@ -91,15 +92,23 @@ export function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function recordTool<T>(events: ToolCallEvent[], toolName: ToolCallEvent["toolName"], inputSummary: string, action: () => Promise<T>): Promise<T> {
+async function publishToolEvent(options: RunGoldenCaseOptions, event: ToolCallEvent) {
+  await options.onToolEvent?.(structuredClone(event));
+}
+
+async function recordTool<T>(options: RunGoldenCaseOptions, events: ToolCallEvent[], toolName: ToolCallEvent["toolName"], inputSummary: string, action: () => Promise<T>): Promise<T> {
   const startedAt = isoNow();
   const started = performance.now();
   try {
     const output = await action();
-    events.push({ id: randomUUID(), kind: "TOOL_CALL", toolName, inputSummary, startedAt, status: "success", outputId: hashValue(output), duration: Math.round(performance.now() - started), error: null });
+    const event: ToolCallEvent = { id: randomUUID(), kind: "TOOL_CALL", toolName, inputSummary, startedAt, status: "success", outputId: hashValue(output), duration: Math.round(performance.now() - started), error: null };
+    events.push(event);
+    await publishToolEvent(options, event);
     return output;
   } catch (error) {
-    events.push({ id: randomUUID(), kind: "TOOL_CALL", toolName, inputSummary, startedAt, status: "failed", outputId: "", duration: Math.round(performance.now() - started), error: errorText(error) });
+    const event: ToolCallEvent = { id: randomUUID(), kind: "TOOL_CALL", toolName, inputSummary, startedAt, status: "failed", outputId: "", duration: Math.round(performance.now() - started), error: errorText(error) };
+    events.push(event);
+    await publishToolEvent(options, event);
     throw error;
   }
 }
@@ -234,13 +243,13 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     let plan: ResearchPlan;
     let planCache: Awaited<ReturnType<typeof loadCachedModelPlan>> | null = null;
     if (llmMode === "cached" && exactGolden) {
-      planCache = await recordTool(events, "cached-model-planner", "读取并校验认证模型 PLAN 缓存、提示词摘要和工具允许列表", () => loadCachedModelPlan(options.fixtureDir, options.researchQuestion));
+      planCache = await recordTool(options, events, "cached-model-planner", "读取并校验认证模型 PLAN 缓存、提示词摘要和工具允许列表", () => loadCachedModelPlan(options.fixtureDir, options.researchQuestion));
       plan = planFromDrafts(options.researchQuestion, planCache.steps);
     } else if (llmMode === "auto") {
       const config = options.llmConfig ?? resolveLlmConfig();
       if (!config) throw new Error("Live LLM mode requires explicit API key, base URL, and model configuration; base URL must use HTTPS");
       liveConfig = config;
-      const drafts = await recordTool(events, "llm-planner", "模型提出研究计划；程序随后校验工具允许列表", () => draftPlanSteps(config, { question: options.researchQuestion, availableInputs: ["离线搜索快照", "本地 PDF", "市场 CSV", ...(options.uploadedFiles ?? []).map((file) => `用户上传 ${file.kind}: ${file.originalFileName}`)] }));
+      const drafts = await recordTool(options, events, "llm-planner", "模型提出研究计划；程序随后校验工具允许列表", () => draftPlanSteps(config, { question: options.researchQuestion, availableInputs: ["离线搜索快照", "本地 PDF", "市场 CSV", ...(options.uploadedFiles ?? []).map((file) => `用户上传 ${file.kind}: ${file.originalFileName}`)] }));
       const valid = validatePlanSteps(drafts, PLAN_TOOL_ALLOWLIST);
       if (!valid) throw new Error("LLM plan failed deterministic allowlist and workflow-anchor validation");
       plan = planFromDrafts(options.researchQuestion, valid);
@@ -253,12 +262,12 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     activeStep = startStep(steps, "COLLECT", [steps[0]!.outputId]);
     await publishProgress(options, steps);
     if (options.failAt === "COLLECT") throw new Error("Injected COLLECT failure");
-    const search = await recordTool(events, "snapshot-search", `离线检索（明确标记缓存快照）：${options.researchQuestion}`, () => searchSnapshot(options.fixtureDir, options.researchQuestion));
+    const search = await recordTool(options, events, "snapshot-search", `离线检索（明确标记缓存快照）：${options.researchQuestion}`, () => searchSnapshot(options.fixtureDir, options.researchQuestion));
     const pdfPath = join(options.fixtureDir, "market-brief.pdf");
-    const pdf = await recordTool(events, "pdf-reader", "读取 market-brief.pdf 并保留逐页定位；来源内指令仅作材料", () => readPdfPages(pdfPath));
+    const pdf = await recordTool(options, events, "pdf-reader", "读取 market-brief.pdf 并保留逐页定位；来源内指令仅作材料", () => readPdfPages(pdfPath));
     const sourceVersion = options.sourceVersion ?? "v1";
     const csvPath = join(options.fixtureDir, `market_${sourceVersion}.csv`);
-    const metrics = await recordTool(events, "csv-calculator", `读取 ${basename(csvPath)} 并执行确定性重算`, () => calculateMarketMetrics(csvPath));
+    const metrics = await recordTool(options, events, "csv-calculator", `读取 ${basename(csvPath)} 并执行确定性重算`, () => calculateMarketMetrics(csvPath));
     const web = webGraph(search);
     const pdfSourceVersionId = "source-version-pdf-brief-snapshot";
     const csvSourceVersionId = `source-version-market-csv-${sourceVersion}`;
@@ -280,7 +289,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     ];
     const uploadedFiles = options.uploadedFiles;
     if (uploadedFiles && uploadedFiles.length > 0) {
-      const uploadGraph = await recordTool(events, "local-file-reader", `解析 ${uploadedFiles.length} 个已校验上传文件并保留页码/行号/单元格`, () => uploadedGraph(uploadedFiles));
+      const uploadGraph = await recordTool(options, events, "local-file-reader", `解析 ${uploadedFiles.length} 个已校验上传文件并保留页码/行号/单元格`, () => uploadedGraph(uploadedFiles));
       sources.push(...uploadGraph.sources);
       sourceVersions.push(...uploadGraph.sourceVersions);
       evidence.push(...uploadGraph.evidence);
@@ -300,7 +309,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     let modelProvenance: ModelProvenance;
 
     if (llmMode === "cached" && exactGolden) {
-      const cached = await recordTool(events, "cached-model-synthesizer", "读取认证模型候选缓存并校验摘要、问题域、Schema、证据 ID 与假设 ID", () => loadCachedModelSynthesis(options.fixtureDir, options.researchQuestion, evidence.map((item) => item.id), seed.assumptions.map((item) => item.id)));
+      const cached = await recordTool(options, events, "cached-model-synthesizer", "读取认证模型候选缓存并校验摘要、问题域、Schema、证据 ID 与假设 ID", () => loadCachedModelSynthesis(options.fixtureDir, options.researchQuestion, evidence.map((item) => item.id), seed.assumptions.map((item) => item.id)));
       synthesis = bundleFromCachedModelDrafts(cached.drafts, { data: seed.data, assumptions: seed.assumptions, sources, evidence }, sourceSnapshotId);
       synthesisMode = "CACHED_MODEL_OUTPUT";
       modelProvenance = { planSource: "CACHED_MODEL_OUTPUT", synthesisSource: "CACHED_MODEL_OUTPUT", provider: cached.provenance.provider, model: cached.provenance.model, generatedAt: cached.provenance.generatedAt, promptSha256: cached.provenance.promptSha256, outputSha256: cached.provenance.outputSha256, cacheFile: cached.provenance.cacheFile };
@@ -308,7 +317,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       const config = liveConfig!;
       let valid: ReturnType<typeof validateLlmDrafts> = [];
       for (let attempt = 1; attempt <= 2 && valid.length < 3; attempt += 1) {
-        const drafts = await recordTool(events, "llm-synthesizer", `单一端点模型提出候选（有界传输尝试 ${attempt}/2）`, () => draftConclusions(config, { question: options.researchQuestion, sources, evidence, data: seed.data }));
+        const drafts = await recordTool(options, events, "llm-synthesizer", `单一端点模型提出候选（有界传输尝试 ${attempt}/2）`, () => draftConclusions(config, { question: options.researchQuestion, sources, evidence, data: seed.data }));
         valid = validateLlmDrafts(drafts, evidence.map((item) => item.id));
       }
       if (valid.length < 3) throw new Error("Live model produced fewer than three schema-valid, evidence-linked candidates");
@@ -377,7 +386,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       uploadedFileIds: (options.uploadedFiles ?? []).map((item) => item.id),
       modelProvenance,
     };
-    const currentArtifacts = await recordTool(events, "pptx-generator", "生成版本化 5 页可编辑 PPTX 与机器可读证据包", () => writeArtifactVersion(run, options.workspaceDir, "INITIAL_DELIVER", {
+    const currentArtifacts = await recordTool(options, events, "pptx-generator", "生成版本化 5 页可编辑 PPTX 与机器可读证据包", () => writeArtifactVersion(run, options.workspaceDir, "INITIAL_DELIVER", {
       triggerRef: run.id,
       adjustmentNote: "五阶段工作流完成后的初始交付",
     }));
