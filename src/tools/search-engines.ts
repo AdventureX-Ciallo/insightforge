@@ -1,24 +1,21 @@
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
-
 import { MAX_SOURCES, truncateSources } from "../source-limit.js";
-
 export { MAX_SOURCES } from "../source-limit.js";
-
 export const searchEngines = ["bing", "google", "baidu"] as const;
 export type SearchEngine = (typeof searchEngines)[number];
-
 export type SearchFetcher = (input: string, init?: RequestInit) => Promise<Response>;
 export type SearchResolver = (hostname: string) => Promise<ReadonlyArray<{ address: string; family: number }>>;
-
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const ENGINE_CONFIG: Record<SearchEngine, { endpoint: string; queryParameter: string; allowedHosts: readonly string[] }> = {
   bing: { endpoint: "https://www.bing.com/search", queryParameter: "q", allowedHosts: ["www.bing.com"] },
   google: { endpoint: "https://www.google.com/search", queryParameter: "q", allowedHosts: ["www.google.com"] },
   baidu: { endpoint: "https://www.baidu.com/s", queryParameter: "wd", allowedHosts: ["www.baidu.com"] },
 };
-
 const blockedAddresses = new BlockList();
+const fakeIpProxyAddresses = new BlockList();
+fakeIpProxyAddresses.addSubnet("198.18.0.0", 15, "ipv4");
+export const FAKE_IP_PROXY_ERROR = "本机 DNS 返回 fake-IP 代理保留段，实时搜索需直连网络或调整代理模式，已 fail-closed 未发出请求";
 for (const [network, prefix] of [
   ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
   ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
@@ -29,20 +26,20 @@ for (const [network, prefix] of [
   ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["100::", 64],
   ["2001:10::", 28], ["2001:db8::", 32], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
 ] as const) blockedAddresses.addSubnet(network, prefix, "ipv6");
-
 function bareAddress(value: string) {
   return value.replace(/^\[|\]$/gu, "").split("%")[0]!;
 }
-
 export function isBlockedIpAddress(value: string) {
   const address = bareAddress(value);
   const family = isIP(address);
   if (family === 0) return true;
   return blockedAddresses.check(address, family === 4 ? "ipv4" : "ipv6");
 }
-
+export function isFakeIpProxyAddress(value: string) {
+  const address = bareAddress(value);
+  return isIP(address) === 4 && fakeIpProxyAddresses.check(address, "ipv4");
+}
 const defaultResolver: SearchResolver = async (hostname) => lookup(hostname, { all: true, verbatim: true });
-
 /** 请求前校验 URL、引擎主机和当次 DNS 地址；默认 fetch 可能再次解析，因此这不是完整的 pinned-IP/DNS-rebinding 防御。 */
 export async function validatePublicHttpUrl(input: string, allowedHosts: readonly string[], resolver: SearchResolver = defaultResolver) {
   let url: URL;
@@ -67,12 +64,14 @@ export async function validatePublicHttpUrl(input: string, allowedHosts: readonl
     throw new Error("Search target host could not be resolved safely");
   }
   if (addresses.length === 0) throw new Error("Search target host returned no addresses");
+  if (addresses.some((item) => isFakeIpProxyAddress(item.address))) {
+    throw new Error(FAKE_IP_PROXY_ERROR);
+  }
   if (addresses.some((item) => isBlockedIpAddress(item.address))) {
     throw new Error("Search target resolves to a private, reserved, or loopback address");
   }
   return url;
 }
-
 export async function validateOutboundSearchUrl(input: string, engine: SearchEngine, resolver: SearchResolver = defaultResolver) {
   return validatePublicHttpUrl(input, ENGINE_CONFIG[engine].allowedHosts, resolver);
 }

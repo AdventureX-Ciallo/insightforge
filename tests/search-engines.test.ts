@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { createInsightForgeServer } from "../src/server.js";
-import { MAX_SOURCES, isBlockedIpAddress, searchSelectedEngine, validateOutboundSearchUrl, type SearchEngine } from "../src/tools/search-engines.js";
+import { FAKE_IP_PROXY_ERROR, MAX_SOURCES, isBlockedIpAddress, isFakeIpProxyAddress, searchSelectedEngine, validateOutboundSearchUrl, type SearchEngine } from "../src/tools/search-engines.js";
 
 const publicResolver = async () => [{ address: "93.184.216.34", family: 4 }];
 
@@ -72,6 +72,19 @@ test("search validates protocol, host, and every DNS address before fetch", asyn
     /private|reserved|loopback/i,
   );
   assert.equal(fetchCalls, 0, "a mixed public/private DNS answer is rejected before fetch");
+  assert.equal(isFakeIpProxyAddress("198.18.0.0"), true);
+  assert.equal(isFakeIpProxyAddress("198.19.255.255"), true);
+  assert.equal(isFakeIpProxyAddress("198.20.0.1"), false);
+  assert.equal(isFakeIpProxyAddress("2001:db8::1"), false);
+  let fakeIpFetchCalls = 0;
+  await assert.rejects(
+    searchSelectedEngine("bing", "新能源汽车", async () => {
+      fakeIpFetchCalls += 1;
+      return new Response("must not be called");
+    }, async () => [{ address: "198.18.1.116", family: 4 }]),
+    (error: unknown) => error instanceof Error && error.message === FAKE_IP_PROXY_ERROR,
+  );
+  assert.equal(fakeIpFetchCalls, 0, "fake-IP proxy DNS must remain fail-closed before fetch");
 });
 
 test("POST /api/sources/search rejects invalid engines and exposes candidates, not evidence", async () => {
@@ -103,5 +116,31 @@ test("POST /api/sources/search rejects invalid engines and exposes candidates, n
     }]);
   } finally {
     await app.stop();
+  }
+
+  const fakeIpWorkspaceDir = await mkdtemp(join(tmpdir(), "insightforge-fake-ip-api-"));
+  let fetchCalls = 0;
+  const fakeIpApp = createInsightForgeServer({
+    fixtureDir: resolve("fixtures/golden"),
+    publicDir: resolve("public"),
+    workspaceDir: fakeIpWorkspaceDir,
+    searchResolver: async () => [{ address: "198.18.1.116", family: 4 }],
+    searchFetcher: async () => {
+      fetchCalls += 1;
+      return new Response("must not be called");
+    },
+  });
+  const fakeIpBaseUrl = await fakeIpApp.start(0, "127.0.0.1");
+  try {
+    const response = await fetch(`${fakeIpBaseUrl}/api/sources/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ engine: "bing", query: "新能源汽车" }),
+    });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: FAKE_IP_PROXY_ERROR });
+    assert.equal(fetchCalls, 0);
+  } finally {
+    await fakeIpApp.stop();
   }
 });

@@ -14,7 +14,7 @@ import { loadApiLlmSettings, publicLlmSettings, saveApiLlmSettings, SettingsStor
 import { researchPresets } from "./presets.js";
 import { checkLiveSources, type AuthorityFetcher } from "./tools/live-source-check.js";
 import { searchLiveSingleProvider, type LiveSearchFetcher } from "./tools/live-source-search.js";
-import { searchEngines, searchSelectedEngine, type SearchFetcher, type SearchResolver } from "./tools/search-engines.js";
+import { FAKE_IP_PROXY_ERROR, searchEngines, searchSelectedEngine, type SearchFetcher, type SearchResolver } from "./tools/search-engines.js";
 import { MAX_UPLOAD_SIZE_BYTES, sanitizeUploadFileName, UploadValidationError } from "./tools/upload-validator.js";
 import { persistUpload, UploadStoreError, verifyPersistedUpload } from "./upload-store.js";
 
@@ -192,6 +192,7 @@ export function publicHttpError(error: unknown) {
     return { status: error.statusCode, message: error.message };
   }
   if (error instanceof SettingsStoreError) return { status: error.statusCode, message: error.message };
+  if (error instanceof Error && error.message === FAKE_IP_PROXY_ERROR) return { status: 503, message: FAKE_IP_PROXY_ERROR };
   return { status: 500, message: "Request failed" };
 }
 
