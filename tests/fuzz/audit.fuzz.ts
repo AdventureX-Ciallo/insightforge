@@ -38,19 +38,28 @@ export async function runAuditFuzz(rng: SeededPrng, cases: number) {
       const changed = graph([`missing-${rng.token()}`], []);
       const targetBundle = bundle(changed.claim, changed.conclusion);
       const after = runDeterministicAudit(targetBundle, [evidence("公开来源提供直接支撑数据")]);
-      invariant(targetBundle.claims[0]!.evidenceStatus === "INSUFFICIENT_EVIDENCE", `case=${index}: deleted citation did not downgrade AI judgment`);
-      invariant(targetBundle.conclusions[0]!.reviewStatus === "PENDING_REVIEW", `case=${index}: unsupported conclusion escaped review`);
+      invariant(after.bundle.claims[0]!.evidenceStatus === "INSUFFICIENT_EVIDENCE", `case=${index}: deleted citation did not downgrade AI judgment`);
+      invariant(after.bundle.conclusions[0]!.reviewStatus === "PENDING_REVIEW", `case=${index}: unsupported conclusion escaped review`);
+      invariant(targetBundle.claims[0]!.evidenceIds.length === 1, `case=${index}: audit mutated its input bundle`);
       invariant(JSON.stringify(before) !== JSON.stringify(after), `case=${index}: citation mutation did not change audit output`);
     } else if (mutation === 1) {
       const firstValue = 10 + rng.int(10_000) / 100;
       const secondValue = firstValue + 1 + rng.int(1_000) / 100;
       const period = `${2020 + rng.int(7)}`;
       const base = graph([], ["datum-a", "datum-b"]);
+      base.claim.text = "公共充电点数量在同一期间存在来源差异";
+      base.claim.originalText = base.claim.text;
+      base.conclusion.text = base.claim.text;
+      base.conclusion.originalAiText = base.claim.text;
       const firstBundle = bundle(base.claim, base.conclusion, [datum("datum-a", "evidence-a", "公共充电点数量", firstValue, period), datum("datum-b", "evidence-b", "公共充电点总量", secondValue, period)]);
       const first = runDeterministicAudit(firstBundle, []);
       invariant(first.conflicts.length === 1, `case=${index}: same-period different values were not preserved as a conflict`);
-      invariant(firstBundle.claims[0]!.evidenceStatus === "CONFLICT", `case=${index}: conflicting data did not propagate to its claim`);
+      invariant(first.bundle.claims[0]!.evidenceStatus === "CONFLICT", `case=${index}: conflicting data did not propagate to its claim`);
       const changed = graph([], ["datum-a", "datum-b"]);
+      changed.claim.text = base.claim.text;
+      changed.claim.originalText = base.claim.text;
+      changed.conclusion.text = base.claim.text;
+      changed.conclusion.originalAiText = base.claim.text;
       const second = runDeterministicAudit(bundle(changed.claim, changed.conclusion, [datum("datum-a", "evidence-a", "公共充电点数量", firstValue, period), datum("datum-b", "evidence-b", "公共充电点总量", secondValue + 1, period)]), []);
       invariant(JSON.stringify(first) !== JSON.stringify(second), `case=${index}: numeric mutation did not change audit output`);
     } else {
@@ -60,7 +69,7 @@ export async function runAuditFuzz(rng: SeededPrng, cases: number) {
       changed.claim.text = rng.pick(["预计明年增长", "forecast growth", "未来展望显示上升"]);
       const targetBundle = bundle(changed.claim, changed.conclusion);
       const after = runDeterministicAudit(targetBundle, [evidence("协会预测下一年度增长")]);
-      invariant(targetBundle.claims[0]!.type === "FORECAST", `case=${index}: forecast language remained typed as FACT`);
+      invariant(after.bundle.claims[0]!.type === "FORECAST", `case=${index}: forecast language remained typed as FACT`);
       invariant(JSON.stringify(before) !== JSON.stringify(after), `case=${index}: type mutation did not change audit output`);
     }
   }

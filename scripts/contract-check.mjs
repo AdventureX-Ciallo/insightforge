@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { createInsightForgeServer } from "../dist/server.js";
+import { hashValue } from "../dist/hash.js";
 
 const root = process.cwd();
 const reportPath = resolve(process.env.INSIGHTFORGE_CONTRACT_REPORT || join(root, ".insightforge", "contract-check-report.json"));
@@ -11,6 +12,7 @@ const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-contract-check-"
 const checks = [];
 const startedAt = new Date().toISOString();
 let baseUrl = null;
+let requestKey = null;
 let upload = null;
 let runId = null;
 let run = null;
@@ -82,8 +84,20 @@ function parseSse(text) {
   });
 }
 
+function protectedOptions(options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return options;
+  const headers = new Headers(options.headers);
+  if (requestKey) headers.set("x-insightforge-request-key", requestKey);
+  return { ...options, headers };
+}
+
+function apiFetch(path, options) {
+  return fetch(`${baseUrl}${path}`, protectedOptions(options));
+}
+
 async function jsonRequest(path, options, expectedStatus = 200) {
-  const response = await expectResponse(await fetch(`${baseUrl}${path}`, options), expectedStatus, `${options?.method || "GET"} ${path}`);
+  const response = await expectResponse(await apiFetch(path, options), expectedStatus, `${options?.method || "GET"} ${path}`);
   return response.json();
 }
 
@@ -91,7 +105,7 @@ async function consumeRunSse(id) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const response = await expectResponse(await fetch(`${baseUrl}/api/runs/${id}/events`, { signal: controller.signal }), 200, "GET run SSE");
+    const response = await expectResponse(await apiFetch(`/api/runs/${id}/events`, { signal: controller.signal }), 200, "GET run SSE");
     requireContract(response.headers.get("content-type") === "text/event-stream; charset=utf-8", "SSE content type mismatch", Object.fromEntries(response.headers));
     const messages = parseSse(await response.text());
     requireContract(messages.some((item) => item.event === "tool"), "SSE did not contain tool events", { eventTypes: messages.map((item) => item.event) });
@@ -128,6 +142,13 @@ try {
     return body;
   });
 
+  await check("request-key", "GET", "/api/request-key", async () => {
+    const body = await jsonRequest("/api/request-key");
+    requireContract(/^[0-9a-f-]{36}$/u.test(body.requestKey), "request-key response contract mismatch", body);
+    requestKey = body.requestKey;
+    return { available: true, length: requestKey.length };
+  });
+
   await check("presets", "GET", "/api/presets", async () => {
     const body = await jsonRequest("/api/presets");
     requireContract(Array.isArray(body) && body.length === 3, "presets must expose exactly three entries", body);
@@ -137,7 +158,7 @@ try {
 
   await check("upload-create", "POST", "/api/uploads", async () => {
     const bytes = Buffer.from("contract_metric,year,value\npublic_chargers,2024,3.58\n", "utf8");
-    const response = await expectResponse(await fetch(`${baseUrl}/api/uploads`, {
+    const response = await expectResponse(await apiFetch("/api/uploads", {
       method: "POST",
       headers: { "content-type": "text/csv", "x-insightforge-file-name": encodeURIComponent("contract-source.csv") },
       body: bytes,
@@ -163,7 +184,8 @@ try {
     });
     requireContract(body.engine === "bing" && body.candidates?.length === 1 && body.candidates[0].materialRole === "CANDIDATE_SOURCE" && body.candidates[0].authorityVerified === false, "search candidate contract mismatch", body);
     requireContract(body.sourceLimitTrace?.maxSources === 10, "search response omitted MAX_SOURCES trace", body);
-    return { mode: "deterministic-contract-provider-not-live-search", engine: body.engine, candidate: body.candidates[0], sourceLimitTrace: body.sourceLimitTrace };
+    requireContract(body.dnsResolution?.resolver === "injected" && body.dnsResolution?.addressCount === 1 && body.dnsResolution?.attempts?.length === 1, "search response omitted DNS resolution trace", body);
+    return { mode: "deterministic-contract-provider-not-live-search", engine: body.engine, candidate: body.candidates[0], sourceLimitTrace: body.sourceLimitTrace, dnsResolution: body.dnsResolution };
   });
 
   await check("run-create", "POST", "/api/runs", async () => {
@@ -189,7 +211,12 @@ try {
     run = body.run;
     requireContract(body.job?.status === "completed" && run?.id === runId, "completed run contract mismatch", body);
     requireContract(run.uploadedFileIds?.includes(upload.id) && run.events?.some((event) => event.toolName === "local-file-reader"), "uploaded source did not enter COLLECT", { uploadedFileIds: run.uploadedFileIds, tools: run.events?.map((event) => event.toolName) });
-    return { runId, status: body.job.status, terminalStatus: run.terminalStatus, steps: run.steps.map((step) => `${step.state}:${step.status}`), toolNames: run.events.map((event) => event.toolName), uploadedFileIds: run.uploadedFileIds };
+    const synthesizeStep = run.steps.find((step) => step.state === "SYNTHESIZE");
+    requireContract(synthesizeStep?.outputId === hashValue(run.synthesisOutput), "persisted SYNTHESIZE outputId is not reproducible from its immutable snapshot", { outputId: synthesizeStep?.outputId, recomputed: hashValue(run.synthesisOutput) });
+    const expectedStates = ["PLAN", "COLLECT", "SYNTHESIZE", "AUDIT", "DELIVER"];
+    requireContract(run.steps.every((step, index) => step.state === expectedStates[index] && step.status === "success" && /^[a-f0-9]{64}$/u.test(step.outputId)), "five-state output contract mismatch", run.steps);
+    requireContract(run.steps[0].consumedOutputIds.length === 0 && run.steps.slice(1).every((step, index) => step.consumedOutputIds.length === 1 && step.consumedOutputIds[0] === run.steps[index].outputId), "step output consumption chain mismatch", run.steps);
+    return { runId, status: body.job.status, terminalStatus: run.terminalStatus, steps: run.steps.map((step) => `${step.state}:${step.status}`), toolNames: run.events.map((event) => event.toolName), uploadedFileIds: run.uploadedFileIds, synthesisOutputId: synthesizeStep.outputId };
   });
 
   await check("current-run", "GET", "/api/current", async () => {
@@ -223,14 +250,31 @@ try {
       body: JSON.stringify({ conclusionId: "conclusion-charging-growth", action: "CONFIRM", reason: "契约检查：证据支持有限范围判断", scopeNote: "仅限当前全国描述性资料范围" }),
     });
     const conclusion = body.run?.conclusions?.find((item) => item.id === "conclusion-charging-growth");
-    requireContract(conclusion?.normalizedReviewStatus === "HUMAN_CONFIRMED" && conclusion?.confirmedAt && conclusion?.confirmedText, "CONFIRM did not create explicit human confirmation", conclusion);
-    return { conclusionId: conclusion.id, reviewStatus: conclusion.normalizedReviewStatus, confirmedAt: conclusion.confirmedAt, artifactVersionCount: body.run.artifactVersions.length };
+    requireContract(conclusion?.reviewStatus === "CONFIRMED" && conclusion?.normalizedReviewStatus === "HUMAN_CONFIRMED" && conclusion?.confirmedAt && conclusion?.confirmedText, "CONFIRM did not create consistent explicit human confirmation", conclusion);
+    const decisionCount = body.run.humanDecisions.length;
+    const artifactVersionCount = body.run.artifactVersions.length;
+    const replay = await expectResponse(await fetch(`${baseUrl}/api/runs/${runId}/decisions`, protectedOptions({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conclusionId: "conclusion-charging-growth", action: "CONFIRM" }),
+    })), 409, "replayed final human decision");
+    const replayBody = await replay.json();
+    requireContract(/already has a final human decision.*EDIT/u.test(replayBody.error || ""), "replay rejection was not actionable", replayBody);
+    const afterReplay = await jsonRequest(`/api/runs/${runId}`);
+    requireContract(
+      afterReplay.run?.humanDecisions?.length === decisionCount && afterReplay.run?.artifactVersions?.length === artifactVersionCount,
+      "replayed final decision changed the decision ledger or artifact chain",
+      { before: { decisionCount, artifactVersionCount }, after: { decisionCount: afterReplay.run?.humanDecisions?.length, artifactVersionCount: afterReplay.run?.artifactVersions?.length } },
+    );
+    return { conclusionId: conclusion.id, reviewStatus: conclusion.normalizedReviewStatus, confirmedAt: conclusion.confirmedAt, artifactVersionCount, replayStatus: replay.status };
   });
 
   await check("source-update", "POST", "/api/runs/:id/source-update", async () => {
     const body = await jsonRequest(`/api/runs/${runId}/source-update`, { method: "POST" });
     run = body.run;
     requireContract(run?.sourceVersion === "v2" && run?.affectedObjectIds?.length > 0, "source update contract mismatch", body);
+    const staleConclusion = run.conclusions.find((item) => item.evidenceStatus === "STALE");
+    requireContract(staleConclusion?.freshness === "STALE" && staleConclusion?.reviewStatus === "NEEDS_REVIEW" && staleConclusion?.normalizedReviewStatus === "NEEDS_REVIEW", "source update produced inconsistent stale/review axes", staleConclusion);
     return { sourceVersion: run.sourceVersion, affectedObjectIds: run.affectedObjectIds, artifactVersionCount: run.artifactVersions.length };
   });
 
@@ -253,7 +297,7 @@ try {
     { kind: "REPORT_PDF", contentType: "application/pdf", signature: "%PDF" },
   ]) {
     await check(`download-${expected.kind.toLowerCase()}`, "GET", `/api/runs/:id/artifacts/${expected.kind}`, async () => {
-      const response = await expectResponse(await fetch(`${baseUrl}/api/runs/${runId}/artifacts/${expected.kind}`), 200, `download ${expected.kind}`);
+      const response = await expectResponse(await apiFetch(`/api/runs/${runId}/artifacts/${expected.kind}`), 200, `download ${expected.kind}`);
       const bytes = new Uint8Array(await response.arrayBuffer());
       const prefix = new TextDecoder().decode(bytes.slice(0, expected.signature.length));
       const artifact = run?.artifacts?.find((item) => item.kind === expected.kind);
@@ -270,7 +314,7 @@ try {
 
   await check("llm-settings-read", "GET", "/api/settings/llm", async () => {
     const body = await jsonRequest("/api/settings/llm");
-    requireContract(typeof body.configured === "boolean" && !Object.hasOwn(body, "apiKey"), "settings GET leaked or omitted contract fields", body);
+    requireContract(typeof body.configured === "boolean" && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "settings GET leaked or omitted contract fields", body);
     return body;
   });
 
@@ -281,13 +325,13 @@ try {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ baseUrl: "https://model.contract.invalid/v1", model: "contract-model", apiKey: contractOnlyToken }),
     });
-    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && !Object.hasOwn(body, "apiKey"), "settings POST did not return a masked contract", body);
+    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && body.baseUrlMasked && body.modelMasked && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "settings POST did not return a masked contract", body);
     return body;
   });
 
   await check("llm-settings-read-masked", "GET", "/api/settings/llm", async () => {
     const body = await jsonRequest("/api/settings/llm");
-    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && !Object.hasOwn(body, "apiKey"), "persisted settings GET did not stay masked", body);
+    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && body.baseUrlMasked && body.modelMasked && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "persisted settings GET did not stay masked", body);
     return body;
   });
 } catch (error) {

@@ -26,13 +26,20 @@ ResearchQuestion
 
 - `SourceVersion` 保存某个来源版本、抓取/快照时间、模式和哈希；`Source` 保存发布者、标题、URL/文件及口径。
 - `Locator` 精确定位网页摘录、PDF 页码、CSV 行列、XLSX 工作表/单元格或计算输入。
+- CSV 定位与确定性计算共用严格的 RFC-4180 风格解析器：支持引号字段、字段内逗号/CRLF、`""` 转义和 UTF-8 BOM；`rows` 按解析后的逻辑记录编号生成，字段内换行不伪造新行，畸形引号 fail-closed。
 - `Evidence` 是来源中的可引用材料；来源观点仍是 `SOURCE_OPINION`，不会自动成为系统事实。
 - `Datum` 是可计算的数据项。它必须连接来源或派生输入，并保存值、单位、期间、公式和上游数据；表格只是输入容器，不自动成为新事实来源。
 - `Assumption` 是估算/预测的显式前提，保存文本、数值、范围、责任主体和来源状态。
 - `Claim` 消费一个或多个 `Evidence/Datum/Assumption`；`Conclusion` 只能引用 `Claim`，不得绕过中间对象直接挂来源。
 - `EvidenceGap` 是 Claim 在现有材料不足时的机器可读缺口，不得为它伪造 Source。
 - `AuditFinding` 记录结构化问题和动作；`CandidateRevision` 保存 AI 或人工产生的新文本版本及前后关系。
+- `synthesisOutput` 保存进入 Audit 前的不可变阶段快照（bundle、模式、证据匹配度、来源快照 ID）；SYNTHESIZE 的 `outputId` 是它的稳定 SHA-256。Audit 在副本上修复，当前证据图与原阶段提交不会互相覆盖。
 - `HumanDecision` 是显式确认或驳回记录；编辑只产生人工编辑版本，不自动产生确认。
+- `HUMAN_CONFIRMED/HUMAN_REJECTED` 是一次性终态：重复提交或直接翻转为另一终态返回冲突且不新增决策/成果版本；必须先 `EDIT` 生成待审修订，才能再次确认或驳回。
+- 信源置信度把权威性、新鲜度与定位完整度分开计算；`OTHER` 表示未命中静态域名分类，即使页码/单元格定位完整、综合分超过通用阈值，也必须向关联结论传播未验证折扣，不能用“找得到”替代“可信”。
+- XLSX 定位按单个 `<c>` 单元格边界解析；空白、仅样式或无缓存值的公式单元格会被跳过，绝不借用后续单元格的值。共享字符串、inline string 与普通值分别解码，`cellRange` 只覆盖实际提取的首末单元格。
+- PPTX 核心结论页支持 Schema 上限 5 条候选；第 5 条触发紧凑行距与字号，所有正文、状态、来源编号及分隔线均保持在 7.5 英寸画布内，3–4 条时保持标准布局。
+- PPTX 来源页支持 Schema 上限 10 个信源；超过 5 个时自动切换为双栏紧凑布局，但仍逐项保留来源编号、标题与定位信息，不允许静默截断。
 - `ArtifactVersion` 是交互报告、PPTX 和证据 JSON 在同一研究快照上的版本集合。
 
 ## 2. 支撑路径与证据缺口路径
@@ -110,11 +117,15 @@ P0-05 要求的七类机器可读标签不能混成一个会丢失信息的单�
 
 `HUMAN_CONFIRMED` 是 P0 要求的机器可读人工确认标签，只能由显式确认动作产生；它不是知识类型。编辑、Audit 修复或来源更新均不能自动产生确认。
 
+为兼容现有 API，运行对象仍同时保存旧 `reviewStatus`，但二者不是可自由组合的双状态：`PENDING_REVIEW ↔ PENDING_REVIEW`、`CONFIRMED ↔ HUMAN_CONFIRMED`、`REJECTED ↔ HUMAN_REJECTED`、`NEEDS_REVIEW ↔ NEEDS_REVIEW` 必须逐项一致。Schema 会拒绝任何交叉伪造，权限边界只读取通过该校验的对象。
+
 ### 3.5 新鲜度 `freshness`
 
 `CURRENT | STALE`
 
 依赖来源发生变化时，受影响对象变为 `STALE`；无关对象保持 `CURRENT`。
+
+旧 `evidenceStatus` 与 normalized 轴同样受约束：非 stale 时 `SUPPORTED/CONFLICT/INSUFFICIENT_EVIDENCE` 必须完全一致；只有 `evidenceStatus=STALE` 时 normalized 字段保留失效前的证据质量，并且 `freshness` 必须为 `STALE`。反向亦成立，`STALE` freshness 不得搭配非 stale 原始状态。
 
 ### 3.6 运行状态
 
@@ -122,6 +133,8 @@ P0-05 要求的七类机器可读标签不能混成一个会丢失信息的单�
 - 运行终态：`DELIVERED | NEEDS_REVIEW | FAILED`。
 
 运行终态与结论审阅状态不同：`DELIVERED` 表示系统已交付一版包含真实状态的成果，不表示其中所有候选都已人工确认。
+
+持久化运行的五个 `RunStep` 必须严格按 `PLAN → COLLECT → SYNTHESIZE → AUDIT → DELIVER` 排列。成功步骤必须携带 64 位 SHA-256 `outputId`；PLAN 不消费输入，之后每个已启动步骤只能消费前一节点的唯一 `outputId`，前一节点必须成功。`DELIVERED/NEEDS_REVIEW` 运行必须五步全成功；任何伪造、断链、额外输入或待执行节点都会被 Zod 拒绝。
 
 ## 4. 人工决定合同
 
@@ -149,6 +162,8 @@ sourceUpdateId?
 
 确定性 Audit 读取当前 `Evidence/Datum/Assumption/Claim/Conclusion`，不得按固定对象 ID 播放结果。
 
+Audit 必须是纯变换：不得原地修改已提交并计算 `outputId` 的 SYNTHESIZE 输入。持久化恢复会重算 `hash(synthesisOutput)` 并与该步骤 `outputId` 比对；不一致的运行对象 fail-closed。
+
 自动修复仅允许：
 
 - 结构归一和挂接已经存在的来源/假设；
@@ -173,7 +188,9 @@ sourceUpdateId?
 
 `authorityVerificationMode`：`NOT_RUN | LIVE_ALLOWLIST`
 
-`synthesisMode`：`CACHED_MODEL_OUTPUT | LIVE_SINGLE_ENDPOINT | DETERMINISTIC_MISMATCH_BLOCK`
+`synthesisMode`：`CACHED_MODEL_OUTPUT | LIVE_SINGLE_ENDPOINT | DETERMINISTIC_GOLDEN_RULES | DETERMINISTIC_MISMATCH_BLOCK`
+
+`offlineMode/offlineModeLabel` 必须由 `synthesisMode` 派生并通过 Schema 交叉校验：缓存输出、确定性黄金规则与确定性失配阻断均为 `true / 使用缓存快照`；在线单端点生成固定为 `false / 在线模型生成 · 信源使用缓存快照`。后一个标签同时说明模型在线而本轮信源发现仍使用离线快照，禁止把混合模式误称为全离线或实时搜索。
 
 - 离线黄金路径使用“加载并校验缓存搜索/模型快照”，不得写成“本次实时发现/生成”。
 - 在线信源发现只允许一个明确提供方；固定白名单核验是另一项能力，不能冒充搜索或与发现模式合并。

@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test } from "playwright/test";
+import JSZip from "jszip";
 
 test("golden case reaches an editable, traceable, update-aware delivery", async ({ page }) => {
   const externalRequests: string[] = [];
@@ -76,6 +77,18 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
   await page.getByRole("link", { name: "下载 PPTX" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("insightforge-report.pptx");
+  const downloadedPath = await download.path();
+  expect(downloadedPath).not.toBeNull();
+  const pptx = await JSZip.loadAsync(await readFile(downloadedPath!));
+  const slideNames = Object.keys(pptx.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/u.test(name));
+  expect(slideNames).toHaveLength(5);
+  for (const slideName of slideNames) {
+    const xml = await pptx.file(slideName)!.async("text");
+    const bounds = [...xml.matchAll(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/gu)]
+      .map((match) => ({ right: Number(match[1]) + Number(match[3]), bottom: Number(match[2]) + Number(match[4]) }));
+    expect(bounds.length, `${slideName} contains editable shapes`).toBeGreaterThan(0);
+    expect(bounds.every((box) => box.right <= 12_192_000 && box.bottom <= 6_858_000), `${slideName} has no off-canvas shape`).toBe(true);
+  }
 
   const evidenceDir = resolve("evidence", "playwright");
   await mkdir(evidenceDir, { recursive: true });

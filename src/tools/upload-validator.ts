@@ -1,6 +1,7 @@
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import JSZip from "jszip";
+import { assertXlsxContainerLimits, XlsxContainerSafetyError } from "./xlsx-container.js";
 
 export const MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_SANITIZED_FILE_NAME_BYTES = 160;
@@ -153,16 +154,14 @@ async function validateXlsxContainer(bytes: Uint8Array) {
   if (!isZipSignature(bytes)) throw new UploadValidationError(415, "XLSX upload is not a ZIP container");
   try {
     const zip = await JSZip.loadAsync(bytes);
-    const entries = Object.keys(zip.files);
-    if (entries.length > 10_000 || entries.some((entry) => entry.startsWith("/") || entry.split("/").includes(".."))) {
-      throw new UploadValidationError(415, "XLSX ZIP container has an unsafe entry layout");
-    }
+    assertXlsxContainerLimits(zip);
     const requiredEntries = ["[Content_Types].xml", "_rels/.rels", "xl/workbook.xml"];
     if (requiredEntries.some((entry) => !zip.file(entry))) {
       throw new UploadValidationError(415, "XLSX ZIP container is missing required workbook entries");
     }
   } catch (error) {
     if (error instanceof UploadValidationError) throw error;
+    if (error instanceof XlsxContainerSafetyError) throw new UploadValidationError(error.statusCode, error.message);
     throw new UploadValidationError(415, "XLSX upload is not a readable workbook container");
   }
 }

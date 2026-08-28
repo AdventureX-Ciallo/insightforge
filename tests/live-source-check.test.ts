@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import test from "node:test";
 
 import { checkLiveSources } from "../src/tools/live-source-check.js";
@@ -38,6 +39,43 @@ test("HTTP 200 challenge pages are not misreported as verified authority content
   }));
   assert.ok(result.results.every((item) => item.status === "failed"));
   assert.ok(result.results.every((item) => item.error === "Authority host returned a challenge or error page"));
+});
+
+test("authority checks reject redirects before requesting the next hop", async () => {
+  let redirectHits = 0;
+  let targetHits = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/redirect") {
+      redirectHits += 1;
+      response.writeHead(302, { location: "/internal" });
+      response.end();
+      return;
+    }
+    if (request.url === "/internal") {
+      targetHits += 1;
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("新能源汽车 1150 1286.6 40.9% 47.6% 1,089.9 357.9 272.6".repeat(2));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const redirectUrl = `http://127.0.0.1:${address.port}/redirect`;
+    const result = await checkLiveSources(async (_input, init) => fetch(redirectUrl, init));
+
+    assert.equal(redirectHits, 4);
+    assert.equal(targetHits, 0, "the redirect target must never receive a request");
+    assert.ok(result.results.every((item) => item.status === "failed"));
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 function withUrl(response: Response, url: string) {

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { runGoldenCase } from "../src/index.js";
-import { reportModel, writePdfReport } from "../src/tools/report-export.js";
+import { markdownReport, reportModel, writePdfReport } from "../src/tools/report-export.js";
 
 function utf16BeHex(value: string) {
   const bytes = Buffer.from(value, "utf16le");
@@ -75,4 +75,19 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
     writePdfReport(run, join(workspaceDir, "missing-parent", "report.pdf")),
     /ENOENT/u,
   );
+});
+
+test("Markdown export escapes raw HTML from untrusted source text", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-markdown-html-"));
+  const run = await runGoldenCase({
+    researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir,
+  });
+  run.evidence[0]!.excerpt = '<script>alert("source")</script><img src=x onerror=alert(1)>';
+  run.sources[0]!.title = '<img src=x onerror="publisher()">';
+  const markdown = markdownReport(run);
+  assert.doesNotMatch(markdown, /(^|[^\\])<(?:script|img)\b/imu);
+  assert.match(markdown, /\\<script\\>/u);
+  assert.match(markdown, /\\<img/u);
 });

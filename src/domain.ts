@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hashValue } from "./hash.js";
 
 export const workflowStates = ["PLAN", "COLLECT", "SYNTHESIZE", "AUDIT", "DELIVER"] as const;
 export const terminalStatuses = ["DELIVERED", "NEEDS_REVIEW", "FAILED"] as const;
@@ -19,7 +20,8 @@ export const normalizedReviewStatuses = ["PENDING_REVIEW", "HUMAN_CONFIRMED", "H
 export const freshnessStatuses = ["CURRENT", "STALE"] as const;
 export const sourceDiscoveryModes = ["OFFLINE_SNAPSHOT", "LIVE_SINGLE_PROVIDER"] as const;
 export const authorityVerificationModes = ["NOT_RUN", "LIVE_ALLOWLIST"] as const;
-export const synthesisModes = ["CACHED_MODEL_OUTPUT", "LIVE_SINGLE_ENDPOINT", "DETERMINISTIC_MISMATCH_BLOCK"] as const;
+export const synthesisModes = ["CACHED_MODEL_OUTPUT", "LIVE_SINGLE_ENDPOINT", "DETERMINISTIC_GOLDEN_RULES", "DETERMINISTIC_MISMATCH_BLOCK"] as const;
+export const offlineModeLabels = ["使用缓存快照", "在线模型生成 · 信源使用缓存快照"] as const;
 
 export type WorkflowState = (typeof workflowStates)[number];
 export type TerminalStatus = (typeof terminalStatuses)[number];
@@ -35,6 +37,7 @@ export type EvidenceStatus = "SUPPORTED" | "CONFLICT" | "INSUFFICIENT_EVIDENCE" 
 export type SourceDiscoveryMode = (typeof sourceDiscoveryModes)[number];
 export type AuthorityVerificationMode = (typeof authorityVerificationModes)[number];
 export type SynthesisMode = (typeof synthesisModes)[number];
+export type OfflineModeLabel = (typeof offlineModeLabels)[number];
 
 export interface RunStep {
   state: WorkflowState;
@@ -323,14 +326,24 @@ export interface ArtifactVersion {
 
 export const MAX_ARTIFACT_VERSIONS = 5 as const;
 export interface ModelProvenance {
-  planSource: "CACHED_MODEL_OUTPUT" | "LIVE_SINGLE_ENDPOINT" | "DETERMINISTIC_MISMATCH_BLOCK";
-  synthesisSource: "CACHED_MODEL_OUTPUT" | "LIVE_SINGLE_ENDPOINT" | "DETERMINISTIC_MISMATCH_BLOCK";
+  planSource: SynthesisMode;
+  synthesisSource: SynthesisMode;
   provider: string;
   model: string;
   generatedAt: string;
   promptSha256: string;
+  planPromptSha256?: string | undefined;
+  synthesisPromptSha256?: string | undefined;
   outputSha256: string;
   cacheFile: string | null;
+  routingNotice?: string | undefined;
+  dataDisclosure?: {
+    externalTransfer: boolean;
+    stages: Array<"PLAN" | "SYNTHESIZE">;
+    sentFields: string[];
+    omittedFields: string[];
+    limits: { researchQuestionChars: number; sourceTitleChars: number; evidenceExcerptChars: number; formulaChars: number };
+  } | undefined;
 }
 
 export interface SourceLimitTrace {
@@ -340,6 +353,20 @@ export interface SourceLimitTrace {
   truncatedCount: number;
   truncated: boolean;
   reason: "MAX_SOURCES" | null;
+}
+
+export interface SynthesisStepOutput {
+  synthesis: {
+    data: Datum[];
+    assumptions: Assumption[];
+    claims: Claim[];
+    evidenceGaps: EvidenceGap[];
+    conclusions: Conclusion[];
+    candidateRevisions: CandidateRevision[];
+  };
+  synthesisMode: SynthesisMode;
+  evidenceFit: number;
+  sourceSnapshotId: string;
 }
 
 export interface ResearchRun {
@@ -353,13 +380,14 @@ export interface ResearchRun {
   sourceDiscoveryMode: SourceDiscoveryMode;
   authorityVerificationMode: AuthorityVerificationMode;
   offlineMode: boolean;
-  offlineModeLabel: string;
+  offlineModeLabel: OfflineModeLabel;
   repairAttempts: number;
   sourceVersion: "v1" | "v2";
   plan: ResearchPlan;
   steps: RunStep[];
   events: ToolCallEvent[];
   sourceLimitTrace: SourceLimitTrace;
+  synthesisOutput: SynthesisStepOutput;
   sources: ResearchSource[];
   sourceVersions: SourceVersion[];
   evidence: Evidence[];
@@ -380,6 +408,40 @@ export interface ResearchRun {
   researchSnapshotId: string;
   uploadedFileIds: string[];
   modelProvenance: ModelProvenance;
+}
+
+export function computeResearchSnapshotId(run: ResearchRun): string {
+  // Snapshot the research graph, not the mutable human-review ledger. A CONFIRM/REJECT
+  // creates a new ArtifactVersion but does not rewrite the underlying research snapshot;
+  // a HUMAN EDIT still changes text/currentRevisionId and therefore changes this hash.
+  const researchConclusions = run.conclusions.map((conclusion) => ({
+    id: conclusion.id,
+    text: conclusion.text,
+    originalAiText: conclusion.originalAiText,
+    claimIds: conclusion.claimIds,
+    evidenceIds: conclusion.evidenceIds,
+    sourceIds: conclusion.sourceIds,
+    evidenceStatus: conclusion.evidenceStatus,
+    missingEvidence: conclusion.missingEvidence,
+    originType: conclusion.originType,
+    normalizedEvidenceStatus: conclusion.normalizedEvidenceStatus,
+    freshness: conclusion.freshness,
+    currentRevisionId: conclusion.currentRevisionId,
+    evidenceGapIds: conclusion.evidenceGapIds,
+    confidenceDiscounts: conclusion.confidenceDiscounts ?? [],
+  }));
+  return hashValue({
+    researchQuestion: run.researchQuestion,
+    sourceVersions: run.sourceVersions,
+    evidence: run.evidence,
+    data: run.data,
+    assumptions: run.assumptions,
+    claims: run.claims,
+    evidenceGaps: run.evidenceGaps,
+    conclusions: researchConclusions,
+    candidateRevisions: run.candidateRevisions,
+    auditFindings: run.auditFindings,
+  });
 }
 
 export const sourceLocatorSchema = z.object({
@@ -583,7 +645,7 @@ export const humanDecisionSchema = z.object({
   sourceUpdateId: z.string().nullable(),
 }).strict();
 
-const runStepSchema = z.object({
+export const runStepSchema = z.object({
   state: z.enum(workflowStates),
   status: z.enum(["pending", "running", "success", "failed"]),
   outputId: z.string(),
@@ -594,7 +656,7 @@ const runStepSchema = z.object({
   summary: z.string(),
 }).strict();
 
-const toolCallEventSchema = z.object({
+export const toolCallEventSchema = z.object({
   id: z.string().min(1),
   kind: z.literal("TOOL_CALL"),
   toolName: z.enum(["snapshot-search", "live-source-search", "authority-source-check", "pdf-reader", "local-file-reader", "csv-calculator", "cached-model-planner", "cached-model-synthesizer", "llm-planner", "llm-synthesizer", "pptx-generator"]),
@@ -659,9 +721,30 @@ export const modelProvenanceSchema = z.object({
   model: z.string().min(1),
   generatedAt: z.string().min(1),
   promptSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  planPromptSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  synthesisPromptSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   outputSha256: z.string().regex(/^[a-f0-9]{64}$/),
   cacheFile: z.string().nullable(),
+  routingNotice: z.string().min(1).optional(),
+  dataDisclosure: z.object({
+    externalTransfer: z.boolean(),
+    stages: z.array(z.enum(["PLAN", "SYNTHESIZE"])),
+    sentFields: z.array(z.string().min(1)),
+    omittedFields: z.array(z.string().min(1)),
+    limits: z.object({
+      researchQuestionChars: z.number().int().positive(),
+      sourceTitleChars: z.number().int().positive(),
+      evidenceExcerptChars: z.number().int().positive(),
+      formulaChars: z.number().int().positive(),
+    }).strict(),
+  }).strict().optional(),
 }).strict();
+
+export function modePresentation(synthesisMode: SynthesisMode): { offlineMode: boolean; offlineModeLabel: OfflineModeLabel } {
+  return synthesisMode === "LIVE_SINGLE_ENDPOINT"
+    ? { offlineMode: false, offlineModeLabel: "在线模型生成 · 信源使用缓存快照" }
+    : { offlineMode: true, offlineModeLabel: "使用缓存快照" };
+}
 
 export const evidencePackageSchema = z.object({
   schemaVersion: z.literal("1.0"),
@@ -669,6 +752,8 @@ export const evidencePackageSchema = z.object({
   synthesisMode: z.enum(synthesisModes),
   sourceDiscoveryMode: z.enum(sourceDiscoveryModes),
   authorityVerificationMode: z.enum(authorityVerificationModes),
+  offlineMode: z.boolean(),
+  offlineModeLabel: z.enum(offlineModeLabels),
   sourceLimitTrace: z.object({
     maxSources: z.literal(10),
     discoveredCount: z.number().int().nonnegative(),
@@ -708,7 +793,7 @@ const researchRunObjectSchema = z.object({
   sourceDiscoveryMode: z.enum(sourceDiscoveryModes),
   authorityVerificationMode: z.enum(authorityVerificationModes),
   offlineMode: z.boolean(),
-  offlineModeLabel: z.string().min(1),
+  offlineModeLabel: z.enum(offlineModeLabels),
   repairAttempts: z.number().int().min(0).max(1),
   sourceVersion: z.enum(["v1", "v2"]),
   plan: researchPlanSchema,
@@ -721,6 +806,19 @@ const researchRunObjectSchema = z.object({
     truncatedCount: z.number().int().nonnegative(),
     truncated: z.boolean(),
     reason: z.literal("MAX_SOURCES").nullable(),
+  }).strict(),
+  synthesisOutput: z.object({
+    synthesis: z.object({
+      data: z.array(datumSchema).min(1),
+      assumptions: z.array(assumptionSchema),
+      claims: z.array(claimSchema).min(1),
+      evidenceGaps: z.array(evidenceGapSchema),
+      conclusions: z.array(conclusionSchema).min(3).max(5),
+      candidateRevisions: z.array(candidateRevisionSchema).min(3),
+    }).strict(),
+    synthesisMode: z.enum(synthesisModes),
+    evidenceFit: z.number().min(0).max(1),
+    sourceSnapshotId: z.string().min(1),
   }).strict(),
   sources: z.array(sourceSchema).min(1).max(10),
   sourceVersions: z.array(sourceVersionSchema).min(1),
@@ -752,14 +850,54 @@ function graphIssue(ctx: z.RefinementCtx, path: Array<string | number>, message:
   ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
 }
 
+const normalizedReviewByLegacy: Record<ReviewStatus, NormalizedReviewStatus> = {
+  PENDING_REVIEW: "PENDING_REVIEW",
+  CONFIRMED: "HUMAN_CONFIRMED",
+  REJECTED: "HUMAN_REJECTED",
+  NEEDS_REVIEW: "NEEDS_REVIEW",
+};
+
 /** Schema 锁不只验证字段形状，也验证证据图引用、人工边界与当前版本唯一性。 */
 type ResearchRunSchemaInput = Omit<ResearchRun, "evictedArtifactVersionCount"> & { evictedArtifactVersionCount?: number | undefined };
 export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRunSchemaInput> = researchRunObjectSchema.superRefine((run, ctx) => {
+  const presentation = modePresentation(run.synthesisMode);
+  if (run.offlineMode !== presentation.offlineMode) graphIssue(ctx, ["offlineMode"], "offlineMode does not match synthesisMode");
+  if (run.offlineModeLabel !== presentation.offlineModeLabel) graphIssue(ctx, ["offlineModeLabel"], "offlineModeLabel does not match synthesisMode");
+  const liveStages = [run.modelProvenance.planSource, run.modelProvenance.synthesisSource].includes("LIVE_SINGLE_ENDPOINT");
+  if (liveStages && (!run.modelProvenance.dataDisclosure?.externalTransfer || run.modelProvenance.dataDisclosure.stages.length === 0)) {
+    graphIssue(ctx, ["modelProvenance", "dataDisclosure"], "Live model use requires a per-run external data disclosure");
+  }
+  if (run.synthesisOutput.synthesisMode !== run.synthesisMode) graphIssue(ctx, ["synthesisOutput", "synthesisMode"], "SYNTHESIZE snapshot mode does not match run mode");
+  const synthesizeStep = run.steps.find((step) => step.state === "SYNTHESIZE");
+  if (!synthesizeStep) graphIssue(ctx, ["steps"], "Run must contain a SYNTHESIZE step");
+  else if (synthesizeStep.outputId !== hashValue(run.synthesisOutput)) {
+    graphIssue(ctx, ["synthesisOutput"], "SYNTHESIZE outputId does not match its persisted immutable snapshot");
+  }
+  run.steps.forEach((step, index) => {
+    if (step.state !== workflowStates[index]) graphIssue(ctx, ["steps", index, "state"], `Step ${index} must be ${workflowStates[index]}`);
+    if (step.status === "success" && !/^[a-f0-9]{64}$/u.test(step.outputId)) graphIssue(ctx, ["steps", index, "outputId"], "Successful step must have a SHA-256 outputId");
+    if (index === 0) {
+      if (step.consumedOutputIds.length > 0) graphIssue(ctx, ["steps", index, "consumedOutputIds"], "PLAN must not consume a predecessor output");
+      return;
+    }
+    if (step.status === "pending") {
+      if (step.consumedOutputIds.length > 0) graphIssue(ctx, ["steps", index, "consumedOutputIds"], "Pending step must not claim consumed outputs");
+      return;
+    }
+    const previous = run.steps[index - 1]!;
+    if (previous.status !== "success") graphIssue(ctx, ["steps", index, "consumedOutputIds"], "Started step requires a successful predecessor");
+    if (step.consumedOutputIds.length !== 1 || step.consumedOutputIds[0] !== previous.outputId) {
+      graphIssue(ctx, ["steps", index, "consumedOutputIds"], "Step must consume exactly its predecessor outputId");
+    }
+  });
+  if (run.terminalStatus !== "FAILED" && run.steps.some((step) => step.status !== "success")) {
+    graphIssue(ctx, ["steps"], "Delivered or reviewable run requires five successful steps");
+  }
   const collections: Array<[string, Array<{ id: string }>]> = [
     ["sources", run.sources], ["sourceVersions", run.sourceVersions], ["evidence", run.evidence], ["data", run.data],
     ["assumptions", run.assumptions], ["claims", run.claims], ["evidenceGaps", run.evidenceGaps],
     ["conclusions", run.conclusions], ["candidateRevisions", run.candidateRevisions], ["artifacts", [...run.artifacts, ...run.artifactHistory]],
-    ["artifactVersions", run.artifactVersions],
+    ["artifactVersions", run.artifactVersions], ["auditFindings", run.auditFindings], ["humanDecisions", run.humanDecisions], ["conflicts", run.conflicts],
   ];
   for (const [name, items] of collections) {
     if (ids(items).size !== items.length) graphIssue(ctx, [name], `${name} contains duplicate IDs`);
@@ -800,6 +938,8 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
     for (const id of claim.datumIds) if (!datumIds.has(id)) graphIssue(ctx, ["claims", index, "datumIds"], `Claim points to unknown Datum ${id}`);
     for (const id of claim.assumptionIds) if (!assumptionIds.has(id)) graphIssue(ctx, ["claims", index, "assumptionIds"], `Claim points to unknown Assumption ${id}`);
     if (claim.evidenceGapId && !gapIds.has(claim.evidenceGapId)) graphIssue(ctx, ["claims", index, "evidenceGapId"], "Claim points to unknown EvidenceGap");
+    if (claim.evidenceStatus === "INSUFFICIENT_EVIDENCE" && !claim.evidenceGapId) graphIssue(ctx, ["claims", index, "evidenceGapId"], "Insufficient claim requires an EvidenceGap");
+    if ((claim.evidenceStatus === "STALE") !== (claim.freshness === "STALE")) graphIssue(ctx, ["claims", index, "freshness"], "Claim STALE evidence and freshness axes must agree");
   });
   run.evidenceGaps.forEach((gap, index) => {
     if (!claimIds.has(gap.claimId)) graphIssue(ctx, ["evidenceGaps", index, "claimId"], "EvidenceGap points to unknown Claim");
@@ -815,6 +955,13 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
       if (!conclusion.sourceIds.includes(discount.sourceId)) graphIssue(ctx, ["conclusions", index, "confidenceDiscounts"], `Confidence discount points to unrelated Source ${discount.sourceId}`);
     }
     if (!revisionIds.has(conclusion.currentRevisionId)) graphIssue(ctx, ["conclusions", index, "currentRevisionId"], "Conclusion points to unknown CandidateRevision");
+    if (conclusion.normalizedReviewStatus !== normalizedReviewByLegacy[conclusion.reviewStatus]) graphIssue(ctx, ["conclusions", index, "normalizedReviewStatus"], "Raw and normalized review statuses disagree");
+    if (conclusion.evidenceStatus === "STALE") {
+      if (conclusion.freshness !== "STALE") graphIssue(ctx, ["conclusions", index, "freshness"], "STALE evidence requires STALE freshness");
+    } else {
+      if (conclusion.normalizedEvidenceStatus !== conclusion.evidenceStatus) graphIssue(ctx, ["conclusions", index, "normalizedEvidenceStatus"], "Raw and normalized evidence statuses disagree");
+      if (conclusion.freshness === "STALE") graphIssue(ctx, ["conclusions", index, "evidenceStatus"], "STALE freshness requires STALE evidence status");
+    }
     if (conclusion.normalizedEvidenceStatus === "INSUFFICIENT_EVIDENCE" && conclusion.evidenceGapIds.length === 0) graphIssue(ctx, ["conclusions", index, "evidenceGapIds"], "Insufficient conclusion requires an EvidenceGap");
     if (conclusion.normalizedEvidenceStatus === "INSUFFICIENT_EVIDENCE" && conclusion.normalizedReviewStatus === "HUMAN_CONFIRMED") graphIssue(ctx, ["conclusions", index], "Insufficient conclusion cannot be human-confirmed");
     if (conclusion.normalizedReviewStatus === "HUMAN_CONFIRMED" && (conclusion.type !== "HUMAN_CONFIRMED" || !conclusion.confirmedAt || !conclusion.confirmedText)) graphIssue(ctx, ["conclusions", index], "Confirmed conclusion lacks confirmation metadata");
@@ -832,6 +979,8 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
   });
   run.artifactVersions.forEach((version, index) => {
     for (const id of version.artifactIds) if (!artifactIds.has(id)) graphIssue(ctx, ["artifactVersions", index, "artifactIds"], `ArtifactVersion points to unknown Artifact ${id}`);
+    if (version.status === "CURRENT" && version.researchSnapshotId !== run.researchSnapshotId) graphIssue(ctx, ["artifactVersions", index, "researchSnapshotId"], "Current ArtifactVersion must match the current research snapshot");
   });
   if (run.artifactVersions.length > 0 && run.artifactVersions.filter((item) => item.status === "CURRENT").length !== 1) graphIssue(ctx, ["artifactVersions"], "Exactly one ArtifactVersion must be current");
+  if (run.researchSnapshotId !== computeResearchSnapshotId(run)) graphIssue(ctx, ["researchSnapshotId"], "Research snapshot ID does not match the current evidence graph");
 });

@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
-import { isPathInside, persistedUploadMatches, persistUpload, UploadStoreError, verifyPersistedUpload } from "../src/upload-store.js";
+import {
+  assertUploadCapacity,
+  isPathInside,
+  maintainUploadRetention,
+  MAX_RETAINED_UPLOADS,
+  MAX_UPLOAD_STORAGE_BYTES,
+  persistedUploadMatches,
+  persistUpload,
+  UploadStoreError,
+  verifyPersistedUpload,
+} from "../src/upload-store.js";
 import { UploadValidationError } from "../src/tools/upload-validator.js";
 
 const bytes = Buffer.from("evidence note\n", "utf8");
@@ -126,6 +136,99 @@ test("persisted upload verification rejects forged identifiers, metadata, paths,
     verifyPersistedUpload(unreadable.workspaceDir, unreadable.record.id, async () => { throw null; }),
     /could not be verified/u,
   );
+});
+
+test("aggregate upload quota is serialized across concurrent writes", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-upload-quota-"));
+  const attempts = await Promise.allSettled(Array.from({ length: MAX_RETAINED_UPLOADS + 1 }, (_, index) => persistUpload({
+    workspaceDir,
+    originalFileName: `note-${index}.txt`,
+    declaredMimeType: "text/plain",
+    bytes: Buffer.from(`evidence note ${index}\n`, "utf8"),
+  })));
+  const accepted = attempts.filter((attempt) => attempt.status === "fulfilled");
+  const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+  assert.equal(accepted.length, MAX_RETAINED_UPLOADS);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0]?.status === "rejected" && rejected[0].reason instanceof UploadStoreError);
+  assert.equal((rejected[0] as PromiseRejectedResult).reason.statusCode, 413);
+  const trace = await maintainUploadRetention(workspaceDir);
+  assert.equal(trace.retainedUploadCount, MAX_RETAINED_UPLOADS);
+
+  assert.doesNotThrow(() => assertUploadCapacity({ retainedBytes: 0, retainedUploadCount: 0 }, 1, 4_097, 1));
+  assert.throws(
+    () => assertUploadCapacity({ retainedBytes: 1, retainedUploadCount: 0 }, 1, 4_097, 1),
+    (error: unknown) => error instanceof UploadStoreError && error.statusCode === 413,
+  );
+  assert.throws(
+    () => assertUploadCapacity({ retainedBytes: 0, retainedUploadCount: 1 }, 0, MAX_UPLOAD_STORAGE_BYTES, 1),
+    (error: unknown) => error instanceof UploadStoreError && error.statusCode === 413,
+  );
+});
+
+test("expired uploads are removed in pairs while malformed and failed cleanup remain quota-visible", async () => {
+  const expired = await stored();
+  await rewriteRecord(expired, (record) => { record.expiresAt = "2000-01-01T00:00:00.000Z"; });
+  const expiredTrace = await maintainUploadRetention(expired.workspaceDir, Date.now());
+  assert.deepEqual(expiredTrace.removedUploadIds, [expired.record.id]);
+  assert.equal(expiredTrace.retainedUploadCount, 0);
+  assert.equal(expiredTrace.retainedBytes, 0);
+  await assert.rejects(access(expired.recordPath));
+  await assert.rejects(access(expired.filePath));
+
+  const accessExpired = await stored();
+  await rewriteRecord(accessExpired, (record) => { record.expiresAt = "2000-01-01T00:00:00.000Z"; });
+  await assert.rejects(
+    verifyPersistedUpload(accessExpired.workspaceDir, accessExpired.record.id),
+    (error: unknown) => error instanceof UploadStoreError && error.statusCode === 410,
+  );
+  await assert.rejects(access(accessExpired.recordPath));
+  await assert.rejects(access(accessExpired.filePath));
+
+  const legacyExpired = await stored();
+  await rewriteRecord(legacyExpired, (record) => {
+    delete record.expiresAt;
+    record.uploadedAt = "2000-01-01T00:00:00.000Z";
+  });
+  const legacyTrace = await maintainUploadRetention(legacyExpired.workspaceDir, Date.now());
+  assert.deepEqual(legacyTrace.removedUploadIds, [legacyExpired.record.id], "legacy records derive expiry from uploadedAt");
+
+  const unsafeExpired = await stored();
+  await rewriteRecord(unsafeExpired, (record) => {
+    record.expiresAt = "2000-01-01T00:00:00.000Z";
+    record.storedFileName = "../../../outside.txt";
+    record.storageKey = "uploads/files/../../../outside.txt";
+  });
+  const unsafeTrace = await maintainUploadRetention(unsafeExpired.workspaceDir, Date.now());
+  assert.equal(unsafeTrace.errorCount, 1);
+  assert.deepEqual(unsafeTrace.removedUploadIds, []);
+  await access(unsafeExpired.filePath);
+
+  const malformed = await mkdtemp(join(tmpdir(), "insightforge-upload-malformed-retention-"));
+  await maintainUploadRetention(malformed);
+  await writeFile(join(malformed, "uploads", "records", "bad.json"), "{bad", "utf8");
+  await writeFile(join(malformed, "uploads", "records", "ignored.txt"), "not a record", "utf8");
+  await mkdir(join(malformed, "uploads", "records", "ignored-directory"));
+  await writeFile(join(malformed, "uploads", "files", "orphan.bin"), "orphan", "utf8");
+  const malformedTrace = await maintainUploadRetention(malformed);
+  assert.equal(malformedTrace.errorCount, 1);
+  assert.equal(malformedTrace.retainedUploadCount, 3);
+  assert.ok(malformedTrace.retainedBytes > 0);
+
+  const inspectionFailure = await maintainUploadRetention(
+    malformed,
+    Date.now(),
+    undefined,
+    async () => { throw new Error("injected lstat race"); },
+  );
+  assert.equal(inspectionFailure.errorCount, 5, "all four retained entries plus malformed JSON remain visible as errors");
+
+  const removalFailure = await stored();
+  await rewriteRecord(removalFailure, (record) => { record.expiresAt = "2000-01-01T00:00:00.000Z"; });
+  const failedTrace = await maintainUploadRetention(removalFailure.workspaceDir, Date.now(), async () => { throw new Error("injected removal failure"); });
+  assert.equal(failedTrace.errorCount, 2);
+  assert.deepEqual(failedTrace.removedUploadIds, []);
+  assert.equal(failedTrace.retainedUploadCount, 1);
 });
 
 test("pre-existing upload directory symlinks cannot escape the workspace", async () => {

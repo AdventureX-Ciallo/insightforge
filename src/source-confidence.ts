@@ -68,6 +68,11 @@ export function scoreSourceConfidence(source: ResearchSource): SourceConfidence 
       ? 0.78
       : 0.4;
   const overall = rounded(authority * 0.55 + freshness * 0.2 + completeness * 0.25);
+  const discountNote = category === "OTHER"
+    ? `未验证 OTHER 类别信源（综合权重 ${overall.toFixed(2)}）：${rationale}；定位完整度不等于权威性，结论必须保留来源折扣。`
+    : overall < 0.7
+      ? `低置信度信源（综合权重 ${overall.toFixed(2)}）：${rationale}，结论不得按高权重证据呈现。`
+      : null;
   return {
     category,
     authority: rounded(authority),
@@ -75,7 +80,7 @@ export function scoreSourceConfidence(source: ResearchSource): SourceConfidence 
     completeness: rounded(completeness),
     overall,
     rationale,
-    discountNote: overall < 0.7 ? `低置信度信源（综合权重 ${overall.toFixed(2)}）：${rationale}，结论不得按高权重证据呈现。` : null,
+    discountNote,
   };
 }
 

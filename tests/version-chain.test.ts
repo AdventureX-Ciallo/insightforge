@@ -93,12 +93,14 @@ test("artifact version APIs preserve immutable delivery, source, and trigger sna
       evictedArtifactVersionCount: number;
     } | undefined;
     for (let decisionNumber = 3; decisionNumber <= 6; decisionNumber += 1) {
+      const action = decisionNumber % 2 === 0 ? "EDIT" : "REJECT";
       const response = await fetch(`${baseUrl}/api/runs/${runId}/decisions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           conclusionId: "conclusion-charging-growth",
-          action: "REJECT",
+          action,
+          ...(action === "EDIT" ? { text: `人工修订版本 ${decisionNumber}：缩小判断范围并等待复核。` } : {}),
           reason: `滚动窗口测试中的第 ${decisionNumber} 次人工决定`,
         }),
       });

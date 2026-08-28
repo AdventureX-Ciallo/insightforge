@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { applyHumanDecision, researchRunSchema, runGoldenCase, type ResearchRun } from "../src/index.js";
+import { applyHumanDecision, computeResearchSnapshotId, researchRunSchema, runGoldenCase, type ResearchRun } from "../src/index.js";
 
 test("schema lock rejects every forged cross-object edge and current-version invariant", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-graph-matrix-"));
@@ -14,6 +14,15 @@ test("schema lock rejects every forged cross-object edge and current-version inv
     workspaceDir,
   });
   assert.equal(researchRunSchema.safeParse(valid).success, true);
+  const legacyWithoutDiscounts = structuredClone(valid);
+  delete legacyWithoutDiscounts.conclusions[0]!.confidenceDiscounts;
+  const explicitEmptyDiscounts = structuredClone(valid);
+  explicitEmptyDiscounts.conclusions[0]!.confidenceDiscounts = [];
+  assert.equal(
+    computeResearchSnapshotId(legacyWithoutDiscounts),
+    computeResearchSnapshotId(explicitEmptyDiscounts),
+    "a legacy omitted confidence-discount list hashes like an explicit empty list",
+  );
 
   const rejected = (label: string, mutate: (run: ResearchRun) => void, base: ResearchRun = valid) => {
     const forged = structuredClone(base);
@@ -22,6 +31,35 @@ test("schema lock rejects every forged cross-object edge and current-version inv
   };
 
   rejected("duplicate collection id", (run) => { run.sources[1]!.id = run.sources[0]!.id; });
+  rejected("cached synthesis cannot claim live mode", (run) => { run.offlineMode = false; });
+  rejected("cached synthesis cannot carry the live label", (run) => { run.offlineModeLabel = "在线模型生成 · 信源使用缓存快照"; });
+  rejected("synthesis snapshot cannot be rewritten after outputId is committed", (run) => { run.synthesisOutput.synthesis.claims[0]!.text = "forged after hash"; });
+  rejected("synthesis snapshot mode must match the run", (run) => { run.synthesisOutput.synthesisMode = "LIVE_SINGLE_ENDPOINT"; });
+  rejected("research snapshot must match the current graph", (run) => { run.researchSnapshotId = "0".repeat(64); });
+  rejected("insufficient claim requires a gap", (run) => { const claim = run.claims.find((item) => item.evidenceStatus === "INSUFFICIENT_EVIDENCE")!; claim.evidenceGapId = null; });
+  rejected("run cannot omit the synthesis state", (run) => { run.steps[2]!.state = "PLAN"; });
+  rejected("step cannot consume a forged predecessor output", (run) => { run.steps[1]!.consumedOutputIds = ["forged-output"]; });
+  rejected("successful step requires a SHA-256 output", (run) => { run.steps[1]!.outputId = ""; });
+  rejected("step cannot consume extra outputs", (run) => { run.steps[1]!.consumedOutputIds.push(run.steps[0]!.outputId); });
+  rejected("PLAN cannot consume an output", (run) => { run.steps[0]!.consumedOutputIds = ["forged-output"]; });
+  rejected("non-failed terminal run requires all steps to succeed", (run) => { run.steps[4]!.status = "pending"; run.steps[4]!.consumedOutputIds = []; });
+  rejected("pending step cannot claim an input", (run) => { run.terminalStatus = "FAILED"; run.steps[4]!.status = "pending"; });
+  rejected("started step requires a successful predecessor", (run) => { run.terminalStatus = "FAILED"; run.steps[1]!.status = "pending"; run.steps[1]!.consumedOutputIds = []; run.steps[2]!.status = "failed"; });
+  rejected("raw confirmation cannot disagree with normalized review", (run) => { run.conclusions[0]!.reviewStatus = "CONFIRMED"; });
+  rejected("raw rejection cannot disagree with normalized review", (run) => { run.conclusions[0]!.reviewStatus = "REJECTED"; });
+  rejected("normalized confirmation cannot hide behind pending raw review", (run) => {
+    const conclusion = run.conclusions[0]!;
+    conclusion.normalizedReviewStatus = "HUMAN_CONFIRMED";
+    conclusion.type = "HUMAN_CONFIRMED";
+    conclusion.confirmedAt = new Date().toISOString();
+    conclusion.confirmedText = conclusion.text;
+  });
+  rejected("raw conflict cannot be normalized as supported", (run) => { run.conclusions[0]!.normalizedEvidenceStatus = "SUPPORTED"; });
+  rejected("raw supported evidence cannot be normalized as conflict", (run) => { run.conclusions[1]!.normalizedEvidenceStatus = "CONFLICT"; });
+  rejected("STALE evidence requires STALE freshness", (run) => { run.conclusions[1]!.evidenceStatus = "STALE"; });
+  rejected("STALE freshness requires STALE evidence", (run) => { run.conclusions[1]!.freshness = "STALE"; });
+  rejected("claim STALE evidence requires STALE freshness", (run) => { run.claims[1]!.evidenceStatus = "STALE"; });
+  rejected("claim STALE freshness requires STALE evidence", (run) => { run.claims[1]!.freshness = "STALE"; });
   rejected("source to unknown version", (run) => { run.sources[0]!.sourceVersionId = "missing-version"; });
   rejected("version to unknown source", (run) => { run.sourceVersions[0]!.sourceId = "missing-source"; });
   rejected("source without one current version", (run) => {

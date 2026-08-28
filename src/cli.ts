@@ -1,8 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { runGoldenCase } from "./engine.js";
+import { isMainModule } from "./main-module.js";
 
 const QUESTION = "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？";
 
@@ -70,7 +70,7 @@ export function cliErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Demo failed";
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   void runCli().catch((error) => {
     console.error(cliErrorMessage(error));
     process.exitCode = 1;

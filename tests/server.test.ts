@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 import JSZip from "jszip";
 
 import { createInsightForgeServer } from "../src/server.js";
+import { MAX_RETAINED_UPLOADS, persistUpload } from "../src/upload-store.js";
 
 async function waitForRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 15_000;
@@ -151,7 +152,7 @@ test("upload endpoint validates bytes, size, and traversal before persisting", a
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "x-insightforge-file-name": encodeURIComponent("source.xlsx"),
       },
-      body: workbookBytes,
+      body: new Uint8Array(workbookBytes),
     });
     assert.equal(acceptedWorkbook.status, 201);
 
@@ -163,7 +164,7 @@ test("upload endpoint validates bytes, size, and traversal before persisting", a
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "x-insightforge-file-name": encodeURIComponent("spoofed.xlsx"),
       },
-      body: await incompleteWorkbook.generateAsync({ type: "nodebuffer" }),
+      body: new Uint8Array(await incompleteWorkbook.generateAsync({ type: "nodebuffer" })),
     });
     assert.equal(rejectedWorkbook.status, 415);
 
@@ -194,6 +195,22 @@ test("upload endpoint validates bytes, size, and traversal before persisting", a
       body: Buffer.alloc(5 * 1024 * 1024 + 1, 0x61),
     });
     assert.equal(oversized.status, 413);
+
+    for (let index = 0; index < MAX_RETAINED_UPLOADS - 2; index += 1) {
+      await persistUpload({
+        workspaceDir,
+        originalFileName: `quota-${index}.txt`,
+        declaredMimeType: "text/plain",
+        bytes: Buffer.from(`quota evidence ${index}\n`, "utf8"),
+      });
+    }
+    const quotaExceeded = await fetch(`${baseUrl}/api/uploads`, {
+      method: "POST",
+      headers: { "content-type": "text/plain", "x-insightforge-file-name": encodeURIComponent("quota-overflow.txt") },
+      body: "quota overflow\n",
+    });
+    assert.equal(quotaExceeded.status, 413);
+    assert.match(((await quotaExceeded.json()) as { error: string }).error, /Aggregate upload quota exceeded/u);
   } finally {
     await app.stop();
   }
@@ -218,7 +235,7 @@ test("server refuses non-loopback listeners and serves browser hardening headers
   }
 });
 
-test("server restores a complete persisted run and rejects forged or incomplete current state", async () => {
+test("server restores valid state, repairs truncated current state, and rejects unrecoverable corruption", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-restore-"));
   const options = {
     fixtureDir: resolve("fixtures/golden"),
@@ -252,6 +269,18 @@ test("server restores a complete persisted run and rejects forged or incomplete 
     await reader.stop();
   }
 
+  await writeFile(join(workspaceDir, "current.json"), "{\n", "utf8");
+  const recoveredReader = createInsightForgeServer(options);
+  const recoveredUrl = await recoveredReader.start(0, "127.0.0.1");
+  try {
+    const recovered = await fetch(`${recoveredUrl}/api/current`);
+    assert.equal(recovered.status, 200);
+    assert.equal(((await recovered.json()) as { run: { id: string } }).run.id, runId);
+    assert.equal((JSON.parse(await readFile(join(workspaceDir, "current.json"), "utf8")) as { id: string }).id, runId);
+  } finally {
+    await recoveredReader.stop();
+  }
+
   await writeFile(join(workspaceDir, "current.json"), JSON.stringify({
     schemaVersion: "1.0",
     id: "forged-delivered-run",
@@ -261,8 +290,21 @@ test("server restores a complete persisted run and rejects forged or incomplete 
   const forgedReader = createInsightForgeServer(options);
   const forgedUrl = await forgedReader.start(0, "127.0.0.1");
   try {
-    assert.equal((await fetch(`${forgedUrl}/api/current`)).status, 404);
+    const recovered = await fetch(`${forgedUrl}/api/current`);
+    assert.equal(recovered.status, 200);
+    assert.equal(((await recovered.json()) as { run: { id: string } }).run.id, runId);
   } finally {
     await forgedReader.stop();
   }
+
+  const unrecoverableWorkspace = await mkdtemp(join(tmpdir(), "insightforge-unrecoverable-current-"));
+  await writeFile(join(unrecoverableWorkspace, "current.json"), "{bad", "utf8");
+  const unrecoverable = createInsightForgeServer({ ...options, workspaceDir: unrecoverableWorkspace });
+  await assert.rejects(unrecoverable.start(0, "127.0.0.1"), /no valid run snapshot can be recovered/u);
+
+  const invalidSnapshotWorkspace = await mkdtemp(join(tmpdir(), "insightforge-unrecoverable-run-"));
+  await mkdir(join(invalidSnapshotWorkspace, "broken-run"));
+  await writeFile(join(invalidSnapshotWorkspace, "broken-run", "run.json"), "[]", "utf8");
+  const invalidSnapshot = createInsightForgeServer({ ...options, workspaceDir: invalidSnapshotWorkspace });
+  await assert.rejects(invalidSnapshot.start(0, "127.0.0.1"), /no valid run snapshot can be recovered/u);
 });

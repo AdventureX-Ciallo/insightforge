@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -59,6 +59,48 @@ test("human decisions preserve the AI original and block unsupported confirmatio
   );
 });
 
+test("final human decisions reject replay and cross-terminal flips until an EDIT reopens review", async () => {
+  const { run } = await makeRun();
+  const conclusionId = "conclusion-charging-growth";
+
+  const confirmed = applyHumanDecision(run, { conclusionId, action: "CONFIRM" });
+  const confirmedDecisionCount = confirmed.humanDecisions.length;
+  const confirmedAt = confirmed.conclusions.find((item) => item.id === conclusionId)?.confirmedAt;
+  assert.throws(
+    () => applyHumanDecision(confirmed, { conclusionId, action: "CONFIRM" }),
+    /already has a final human decision.*EDIT/u,
+  );
+  assert.throws(
+    () => applyHumanDecision(confirmed, { conclusionId, action: "REJECT" }),
+    /already has a final human decision.*EDIT/u,
+  );
+  assert.equal(confirmed.humanDecisions.length, confirmedDecisionCount);
+  assert.equal(confirmed.conclusions.find((item) => item.id === conclusionId)?.confirmedAt, confirmedAt);
+
+  const rejected = applyHumanDecision(run, { conclusionId, action: "REJECT" });
+  const rejectedDecisionCount = rejected.humanDecisions.length;
+  assert.throws(
+    () => applyHumanDecision(rejected, { conclusionId, action: "REJECT" }),
+    /already has a final human decision.*EDIT/u,
+  );
+  assert.throws(
+    () => applyHumanDecision(rejected, { conclusionId, action: "CONFIRM" }),
+    /already has a final human decision.*EDIT/u,
+  );
+  assert.equal(rejected.humanDecisions.length, rejectedDecisionCount);
+
+  const reopened = applyHumanDecision(confirmed, {
+    conclusionId,
+    action: "EDIT",
+    text: "人工修订后重新进入待审。",
+    reason: "新证据要求重写判断",
+  });
+  assert.equal(reopened.conclusions.find((item) => item.id === conclusionId)?.normalizedReviewStatus, "PENDING_REVIEW");
+  const reconsidered = applyHumanDecision(reopened, { conclusionId, action: "REJECT" });
+  assert.equal(reconsidered.conclusions.find((item) => item.id === conclusionId)?.normalizedReviewStatus, "HUMAN_REJECTED");
+  assert.equal(reconsidered.humanDecisions.length, confirmedDecisionCount + 2);
+});
+
 test("source v2 selectively invalidates confirmation, recalculates, and refreshes exports", async () => {
   const { run, workspaceDir } = await makeRun();
   const confirmed = await applyHumanDecisionAndPersist(run, {
@@ -76,6 +118,9 @@ test("source v2 selectively invalidates confirmation, recalculates, and refreshe
     workspaceDir,
   });
 
+  const v2Csv = await readFile(resolve("fixtures/golden/market_v2.csv"), "utf8");
+  const v2Fields = v2Csv.trim().split("\n").find((line) => line.startsWith("2024,"))!.split(",").map(Number);
+
   assert.equal(updated.sourceVersion, "v2");
   for (const requiredId of ["claim-penetration", "conclusion-penetration", "datum-penetration", "evidence-market-csv", "source-market-csv", "source-version-market-csv-v1", "source-version-market-csv-v2"]) {
     assert.ok(updated.affectedObjectIds.includes(requiredId), `affected objects include ${requiredId}`);
@@ -89,6 +134,11 @@ test("source v2 selectively invalidates confirmation, recalculates, and refreshe
   assert.notEqual(
     updated.data.find((item) => item.id === "datum-penetration")?.value,
     confirmed.data.find((item) => item.id === "datum-penetration")?.value,
+  );
+  assert.equal(updated.sources.find((item) => item.id === "source-market-csv")?.excerpt, v2Csv);
+  assert.deepEqual(
+    updated.data.find((item) => item.id === "datum-penetration")?.inputs.map((input) => input.value),
+    [v2Fields[1], v2Fields[2]],
   );
   assert.deepEqual(
     updated.conclusions.find((item) => item.id === "conclusion-charging-growth"),

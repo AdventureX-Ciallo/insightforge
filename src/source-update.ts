@@ -1,36 +1,71 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+
 import { persistRun, writeArtifactVersion } from "./artifacts.js";
 import { researchRunSchema, type ResearchRun } from "./domain.js";
+import { DomainError } from "./domain-error.js";
 import { hashFile, hashValue } from "./hash.js";
 import { GOLDEN_RESEARCH_QUESTION } from "./model-cache.js";
 import { applySourceConfidence } from "./source-confidence.js";
 import { calculateMarketMetrics } from "./tools/csv-calculator.js";
+
 export interface SourceUpdateOptions {
   fixtureDir: string;
   workspaceDir: string;
 }
-export const GOLDEN_SOURCE_UPDATE_ONLY_MESSAGE = "来源更新仅适用于内置黄金案例的 v1→v2 演示";
-export class SourceUpdateError extends Error {
-  readonly statusCode = 422;
+
+function notApplicable() {
+  return new DomainError(422, "SOURCE_UPDATE_NOT_APPLICABLE", "来源更新仅适用于内置黄金案例的 v1→v2 演示");
 }
+
 /** 内置确定性 v1→v2：保留旧 SourceVersion/ArtifactVersion，只让依赖链上的对象失效。 */
 export async function applySourceUpdate(current: ResearchRun, options: SourceUpdateOptions): Promise<ResearchRun> {
-  if (current.researchQuestion !== GOLDEN_RESEARCH_QUESTION) throw new SourceUpdateError(GOLDEN_SOURCE_UPDATE_ONLY_MESSAGE);
-  if (current.sourceVersion === "v2") return current;
+  if (current.sourceVersion !== "v1") {
+    throw new DomainError(409, "SOURCE_ALREADY_V2", "来源已在 v2；同一任务的 v1→v2 更新只能执行一次");
+  }
+  if (current.researchQuestion !== GOLDEN_RESEARCH_QUESTION) throw notApplicable();
   const run = structuredClone(current);
+  const source = run.sources.find((item) => item.version === "v1" && item.locator.fileName === "market_v1.csv");
+  if (!source) throw notApplicable();
+  const linkedEvidence = run.evidence.filter((item) => item.sourceId === source.id);
+  const linkedEvidenceIds = new Set(linkedEvidence.map((item) => item.id));
+  const penetrationDatum = run.data.find((item) => linkedEvidenceIds.has(item.evidenceId)
+    && item.formula === "nev_sales_million / total_auto_sales_million * 100"
+    && item.period === "2024");
+  const oldVersion = run.sourceVersions.find((item) => item.id === source.sourceVersionId);
+  if (linkedEvidence.length === 0) throw notApplicable();
+  if (!penetrationDatum) throw notApplicable();
+  if (!oldVersion) throw notApplicable();
+
+  const dataById = new Map(run.data.map((item) => [item.id, item]));
+  const affectedClaims = run.claims.filter((claim) => {
+    if (claim.datumIds.includes(penetrationDatum.id)) return true;
+    if (!claim.evidenceIds.some((id) => linkedEvidenceIds.has(id))) return false;
+    // A direct evidence citation with no datum derived from that evidence is still a real
+    // dependency. Conversely, a claim linked only to an unchanged datum from the same CSV
+    // (for example charger growth) remains current.
+    return !claim.datumIds.some((id) => {
+      const datum = dataById.get(id)!;
+      return linkedEvidenceIds.has(datum.evidenceId);
+    });
+  });
+  const affectedClaimIds = new Set(affectedClaims.map((item) => item.id));
+  const affectedConclusions = run.conclusions.filter((item) => item.claimIds.some((id) => affectedClaimIds.has(id)));
+  const previousRevisions = new Map(affectedConclusions.map((conclusion) => [
+    conclusion.id,
+    run.candidateRevisions.find((item) => item.id === conclusion.currentRevisionId),
+  ]));
+  if (affectedClaims.length === 0 || affectedConclusions.length === 0 || [...previousRevisions.values()].some((item) => !item)) throw notApplicable();
+
   const csvPath = resolve(options.fixtureDir, "market_v2.csv");
+  const csvText = await readFile(csvPath, "utf8");
   const metrics = await calculateMarketMetrics(csvPath);
+  const currentRow = metrics.rows.find((row) => row.year === 2024)!;
+  const previousPenetration = penetrationDatum.value;
   const now = new Date().toISOString();
   const updateId = `source-update-${randomUUID()}`;
-  const source = run.sources.find((item) => item.id === "source-market-csv");
-  const evidence = run.evidence.find((item) => item.id === "evidence-market-csv");
-  const datum = run.data.find((item) => item.id === "datum-penetration");
-  const claim = run.claims.find((item) => item.id === "claim-penetration");
-  const conclusion = run.conclusions.find((item) => item.id === "conclusion-penetration");
-  if (!source || !evidence || !datum || !claim || !conclusion) throw new Error("Source dependency chain is incomplete");
-  const oldVersion = run.sourceVersions.find((item) => item.id === source.sourceVersionId);
-  if (oldVersion) oldVersion.isCurrent = false;
+  oldVersion.isCurrent = false;
   const v2VersionId = "source-version-market-csv-v2";
   run.sourceVersions.push({
     id: v2VersionId,
@@ -47,78 +82,95 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
   source.sourceVersionId = v2VersionId;
   source.locator = run.sourceVersions.at(-1)!.locator;
   source.capturedAt = now;
-  source.excerpt = "2023,9.495,30.094,2.726\n2024,12.866,31.436,3.579";
+  source.excerpt = csvText;
   source.freshness = "CURRENT";
-  evidence.excerpt = `2024 penetration = ${metrics.penetration.toFixed(4)}%; charger growth = ${metrics.chargerGrowth.toFixed(4)}%`;
-  evidence.locator = source.locator;
-  evidence.freshness = "CURRENT";
-  datum.value = metrics.penetration;
-  datum.metric = "2024 新能源汽车新车销量占比（最终输入重算）";
-  datum.inputs = [{ label: "新能源汽车最终销量", value: 12.866, unit: "百万辆" }, { label: "汽车最终总销量", value: 31.436, unit: "百万辆" }];
-  datum.freshness = "CURRENT";
-  claim.text = `来源更新：全汽车最终销量口径重算为 ${metrics.penetration.toFixed(1)}%，原预测输入对应判断已失效；与乘用车国内零售 47.6% 仍属不同口径。`;
-  claim.originalText = claim.originalText;
-  claim.evidenceStatus = "STALE";
-  claim.freshness = "STALE";
 
-  const previousRevision = run.candidateRevisions.find((item) => item.id === conclusion.currentRevisionId);
-  if (!previousRevision) throw new Error("Source dependency chain is incomplete");
-  previousRevision.isCurrent = false;
-  const revisionId = `revision-source-update-${randomUUID()}`;
-  const previousConclusionText = conclusion.text;
-  conclusion.text = `来源已更新：2024 全汽车销量份额由预测输入重算值 37.1% 变为最终输入重算值 ${metrics.penetration.toFixed(1)}%；旧候选判断和人工确认均已失效，需重新审查口径冲突。`;
-  conclusion.currentRevisionId = revisionId;
-  conclusion.originType = "DETERMINISTIC";
-  conclusion.evidenceStatus = "STALE";
-  conclusion.normalizedEvidenceStatus = "CONFLICT";
-  conclusion.reviewStatus = "NEEDS_REVIEW";
-  conclusion.normalizedReviewStatus = "NEEDS_REVIEW";
-  conclusion.freshness = "STALE";
-  conclusion.type = "AI_JUDGMENT";
-  conclusion.confirmedAt = null;
-  conclusion.confirmedText = null;
-  run.candidateRevisions.push({
-    id: revisionId,
-    conclusionId: conclusion.id,
-    parentRevisionId: previousRevision.id,
-    authorType: "SYSTEM",
-    originType: "DETERMINISTIC",
-    text: conclusion.text,
-    changeReason: "来源 v1→v2 触发确定性重算；该文本只说明失效与数值变化，不是新行业判断",
-    createdAt: now,
-    auditStatus: "NEEDS_REVIEW",
-    auditFindingIds: [],
-    sourceSnapshotId: hashValue(run.sourceVersions.filter((item) => item.isCurrent)),
-    isCurrent: true,
-  });
-
-  const invalidated = run.humanDecisions.filter((item) => item.conclusionId === conclusion.id && item.action === "CONFIRM" && !item.invalidatedAt);
-  for (const decision of invalidated) {
-    decision.invalidatedAt = now;
-    decision.invalidationReason = "支撑该结论的 source-market-csv 从 v1 更新到 v2";
-    decision.sourceUpdateId = updateId;
+  for (const evidence of linkedEvidence) {
+    evidence.excerpt = `2024 penetration = ${metrics.penetration.toFixed(4)}%; charger growth = ${metrics.chargerGrowth.toFixed(4)}%`;
+    evidence.locator = source.locator;
+    evidence.freshness = "CURRENT";
   }
-  if (invalidated.length > 0) {
-    run.humanDecisions.push({
-      id: randomUUID(),
+  penetrationDatum.value = metrics.penetration;
+  penetrationDatum.metric = "2024 新能源汽车新车销量占比（最终输入重算）";
+  penetrationDatum.inputs = [{ label: "新能源汽车最终销量", value: currentRow.nevSales, unit: "百万辆" }, { label: "汽车最终总销量", value: currentRow.totalSales, unit: "百万辆" }];
+  penetrationDatum.freshness = "CURRENT";
+
+  for (const claim of affectedClaims) {
+    claim.text = `来源更新：2024 全汽车销量份额由 v1 的 ${previousPenetration.toFixed(1)}% 重算为 v2 的 ${metrics.penetration.toFixed(1)}%；原候选判断已失效，需结合其既有证据重新审查。`;
+    claim.evidenceStatus = "STALE";
+    claim.freshness = "STALE";
+  }
+
+  const sourceSnapshotId = hashValue(run.sourceVersions.filter((item) => item.isCurrent));
+  const revisionIds: string[] = [];
+  for (const conclusion of affectedConclusions) {
+    const previousRevision = previousRevisions.get(conclusion.id)!;
+    previousRevision!.isCurrent = false;
+    const revisionId = `revision-source-update-${randomUUID()}`;
+    revisionIds.push(revisionId);
+    const previousConclusionText = conclusion.text;
+    conclusion.text = `来源已更新：2024 全汽车销量份额由 v1 的 ${previousPenetration.toFixed(1)}% 变为 v2 的 ${metrics.penetration.toFixed(1)}%；旧候选判断和人工确认均已失效，需结合原证据路径重新审查。`;
+    conclusion.currentRevisionId = revisionId;
+    conclusion.originType = "DETERMINISTIC";
+    conclusion.evidenceStatus = "STALE";
+    conclusion.reviewStatus = "NEEDS_REVIEW";
+    conclusion.normalizedReviewStatus = "NEEDS_REVIEW";
+    conclusion.freshness = "STALE";
+    conclusion.type = "AI_JUDGMENT";
+    conclusion.confirmedAt = null;
+    conclusion.confirmedText = null;
+    run.candidateRevisions.push({
+      id: revisionId,
       conclusionId: conclusion.id,
-      action: "REVOKE_ON_SOURCE_UPDATE",
-      decidedAt: now,
-      previousText: previousConclusionText,
-      resultingText: conclusion.text,
-      candidateRevisionId: revisionId,
-      decisionReason: "来源版本变化使原确认依据失效",
-      scopeNote: null,
-      invalidatedAt: now,
-      invalidationReason: "source-market-csv v1→v2",
-      sourceUpdateId: updateId,
+      parentRevisionId: previousRevision!.id,
+      authorType: "SYSTEM",
+      originType: "DETERMINISTIC",
+      text: conclusion.text,
+      changeReason: "来源 v1→v2 触发确定性重算；该文本只说明失效与数值变化，不是新行业判断",
+      createdAt: now,
+      auditStatus: "NEEDS_REVIEW",
+      auditFindingIds: [],
+      sourceSnapshotId,
+      isCurrent: true,
     });
+
+    const invalidated = run.humanDecisions.filter((item) => item.conclusionId === conclusion.id && item.action === "CONFIRM" && !item.invalidatedAt);
+    for (const decision of invalidated) {
+      decision.invalidatedAt = now;
+      decision.invalidationReason = `支撑该结论的 ${source.id} 从 v1 更新到 v2`;
+      decision.sourceUpdateId = updateId;
+    }
+    if (invalidated.length > 0) {
+      run.humanDecisions.push({
+        id: randomUUID(),
+        conclusionId: conclusion.id,
+        action: "REVOKE_ON_SOURCE_UPDATE",
+        decidedAt: now,
+        previousText: previousConclusionText,
+        resultingText: conclusion.text,
+        candidateRevisionId: revisionId,
+        decisionReason: "来源版本变化使原确认依据失效",
+        scopeNote: null,
+        invalidatedAt: now,
+        invalidationReason: `${source.id} v1→v2`,
+        sourceUpdateId: updateId,
+      });
+    }
   }
 
   run.sourceVersion = "v2";
   run.terminalStatus = "NEEDS_REVIEW";
   run.updatedAt = now;
-  run.affectedObjectIds = [source.id, oldVersion?.id, v2VersionId, evidence.id, datum.id, claim.id, conclusion.id, revisionId].filter((id): id is string => Boolean(id));
+  run.affectedObjectIds = [...new Set([
+    source.id,
+    oldVersion.id,
+    v2VersionId,
+    ...linkedEvidence.map((item) => item.id),
+    penetrationDatum.id,
+    ...affectedClaims.map((item) => item.id),
+    ...affectedConclusions.map((item) => item.id),
+    ...revisionIds,
+  ])];
   applySourceConfidence(run.sources, run.conclusions);
   await writeArtifactVersion(run, options.workspaceDir, "SOURCE_UPDATE", {
     triggerRef: updateId,

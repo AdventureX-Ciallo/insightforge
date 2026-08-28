@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readResponseBytesLimited } from "./limited-response.js";
 
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const AUTHORITY_SOURCES = [
@@ -26,32 +27,6 @@ const AUTHORITY_SOURCES = [
 
 export type AuthorityFetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
-async function readLimited(response: Response) {
-  const length = Number(response.headers.get("content-length") ?? 0);
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error("Response exceeds safety limit");
-  if (!response.body) return new Uint8Array();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_RESPONSE_BYTES) {
-      await reader.cancel();
-      throw new Error("Response exceeds safety limit");
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 export async function checkLiveSources(fetcher: AuthorityFetcher = fetch) {
   const checkedAt = new Date().toISOString();
   const results = await Promise.all(AUTHORITY_SOURCES.map(async (source) => {
@@ -68,7 +43,7 @@ export async function checkLiveSources(fetcher: AuthorityFetcher = fetch) {
       if (response.redirected) throw new Error("Unexpected redirect");
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
       if (contentType && !contentType.includes("text/html")) throw new Error("Unexpected content type");
-      const bytes = await readLimited(response);
+      const bytes = await readResponseBytesLimited(response, MAX_RESPONSE_BYTES, "Response exceeds safety limit");
       if (bytes.byteLength < 64) throw new Error("Authority response is unexpectedly short");
       const text = new TextDecoder().decode(bytes);
       if (/too many requests|captcha|访问验证|access denied|<title>\s*(?:error|错误)/iu.test(text)) {

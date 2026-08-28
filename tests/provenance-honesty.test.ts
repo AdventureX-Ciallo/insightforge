@@ -45,12 +45,12 @@ test("a LIVE_SINGLE_ENDPOINT run never carries offline cache labels (#4)", async
       fixtureDir: resolve("fixtures/golden"),
       workspaceDir: await mkdtemp(join(tmpdir(), "provenance-")),
       llmMode: "auto",
-      llmConfig: { baseUrl: "https://example.invalid/v1", model: "test-model", apiKey: "sk-test" },
+      llmConfig: { baseUrl: "https://example.invalid/v1", model: "test-model", apiKey: "not-a-real-key" },
     });
     assert.ok(sawLiveCall, "stubbed transport must have been used");
     assert.equal(run.synthesisMode, "LIVE_SINGLE_ENDPOINT");
     assert.equal(run.offlineMode, false);
-    assert.equal(run.offlineModeLabel, "在线单一端点模型");
+    assert.equal(run.offlineModeLabel, "在线模型生成 · 信源使用缓存快照");
     assert.ok(run.conclusions.length >= 3);
     assert.ok(run.conclusions.every((item) => !item.text.includes("缓存")));
   } finally {

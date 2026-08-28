@@ -56,22 +56,28 @@ function buildSlides(run: ResearchRun) {
   cover.text("PROOF OF INSIGHT", 1.1, 0.77, 4.6, 0.34, { size: 11, color: C.cyan, bold: true });
   cover.text(run.researchQuestion, 1.1, 1.32, 10.9, 1.55, { size: 30, color: C.white, bold: true });
   cover.text(`研究范围 · ${run.plan.scope}`, 1.1, 3.08, 10.9, 0.62, { size: 13, color: "C7D3DE", valign: "t" });
-  // 溯源诚实（#4）：封面模式标签跟随运行真实来源，不再硬编码离线文案。
-  cover.text(run.offlineMode ? `离线黄金案例 · ${run.offlineModeLabel}` : `在线单一端点 · ${run.offlineModeLabel}`, 1.1, 5.95, 4.3, 0.36, { size: 12, color: C.amber, bold: true });
+  cover.text(run.offlineMode ? `离线黄金案例 · ${run.offlineModeLabel}` : run.offlineModeLabel, 1.1, 5.95, 5.8, 0.36, { size: 12, color: C.amber, bold: true });
   cover.text("01", 12.05, 7.02, 0.55, 0.2, { size: 9, color: "9FB0C0", align: "r" });
   slides.push(cover);
 
   const conclusions = new SlideBuilder(C.white);
   conclusions.header("Core conclusions", "核心结论与人工确认状态", 2);
+  const compactConclusions = run.conclusions.length === 5;
+  const conclusionStartY = compactConclusions ? 1.5 : 1.55;
+  const conclusionPitch = compactConclusions ? 1.04 : 1.28;
+  const conclusionTextHeight = compactConclusions ? 0.62 : 0.78;
+  const conclusionSourceOffset = compactConclusions ? 0.66 : 0.8;
+  const conclusionSourceHeight = compactConclusions ? 0.18 : 0.2;
+  const conclusionDividerOffset = compactConclusions ? 0.93 : 1.08;
   run.conclusions.forEach((conclusion, index) => {
-    const y = 1.55 + index * 1.28;
+    const y = conclusionStartY + index * conclusionPitch;
     const color = conclusion.evidenceStatus === "INSUFFICIENT_EVIDENCE" ? C.red : conclusion.evidenceStatus === "CONFLICT" ? C.amber : C.cyan;
     conclusions.text(String(index + 1).padStart(2, "0"), 0.72, y, 0.45, 0.35, { size: 16, color, bold: true });
-    conclusions.text(conclusion.text, 1.35, y - 0.03, 9.35, 0.78, { size: 14, bold: true, valign: "t" });
+    conclusions.text(conclusion.text, 1.35, y - 0.03, 9.35, conclusionTextHeight, { size: compactConclusions ? 12 : 14, bold: true, valign: "t" });
     conclusions.rect(10.92, y, 1.65, 0.34, color, color, true);
     conclusions.text(conclusion.reviewStatus, 10.98, y + 0.02, 1.53, 0.25, { size: 8, color: C.white, bold: true, align: "ctr" });
-    conclusions.text(conclusion.sourceIds.map((sourceId) => `[S${run.sources.findIndex((source) => source.id === sourceId) + 1}]`).join(" "), 1.35, y + 0.8, 2.4, 0.2, { size: 8, color: C.slate });
-    if (index < run.conclusions.length - 1) conclusions.rect(1.35, y + 1.08, 11.1, 0.008, C.line);
+    conclusions.text(conclusion.sourceIds.map((sourceId) => `[S${run.sources.findIndex((source) => source.id === sourceId) + 1}]`).join(" "), 1.35, y + conclusionSourceOffset, 2.4, conclusionSourceHeight, { size: 8, color: C.slate });
+    if (index < run.conclusions.length - 1) conclusions.rect(1.35, y + conclusionDividerOffset, 11.1, 0.008, C.line);
   });
   slides.push(conclusions);
 
@@ -80,13 +86,13 @@ function buildSlides(run: ResearchRun) {
   const calculation = run.data.find((datum) => datum.id === "datum-penetration");
   const estimate = run.data.find((datum) => datum.id === "datum-adequacy-estimate");
   data.rect(0.75, 1.65, 5.75, 3.5, C.mist, "D5E2E8", true);
-  data.text(`${calculation?.value.toFixed(1)}%`, 1.15, 2.0, 4.7, 0.8, { size: 38, bold: true, align: "ctr" });
+  data.text(calculation ? `${calculation.value.toFixed(1)}%` : "数据缺失", 1.15, 2.0, 4.7, 0.8, { size: 38, bold: true, align: "ctr" });
   data.text(run.sourceVersion === "v1" ? "2024 新能源汽车份额（预测输入）" : "2024 新能源汽车新车销量占比（最终）", 1.15, 2.9, 4.7, 0.34, { size: 15, color: C.slate, bold: true, align: "ctr" });
-  data.text(`${calculation?.formula}\n输入：${calculation?.inputs.map((input) => `${input.label}=${input.value}${input.unit}`).join("；")}`, 1.12, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
+  data.text(calculation ? `${calculation.formula}\n输入：${calculation.inputs.map((input) => `${input.label}=${input.value}${input.unit}`).join("；")}` : "缺少计算公式与输入，禁止展示伪造数值。", 1.12, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
   data.rect(6.85, 1.65, 5.75, 3.5, "FFF7E5", "F4DCA4", true);
-  data.text(`${estimate?.value.toFixed(2)} 百万`, 7.25, 2.0, 4.7, 0.8, { size: 34, bold: true, align: "ctr" });
+  data.text(estimate ? `${estimate.value.toFixed(2)} 百万` : "估算缺失", 7.25, 2.0, 4.7, 0.8, { size: 34, bold: true, align: "ctr" });
   data.text("风险调整后可有效服务充电点（估算）", 7.25, 2.9, 4.7, 0.34, { size: 14, color: C.slate, bold: true, align: "ctr" });
-  data.text(`${estimate?.formula}\n假设：${estimate?.assumptions.join("；")}`, 7.22, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
+  data.text(estimate ? `${estimate.formula}\n假设：${estimate.assumptions.join("；")}` : "缺少估算公式或假设，禁止展示伪造数值。", 7.22, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
   data.text(`计算来源：market_${run.sourceVersion}.csv｜中汽协与中国充电联盟公开资料的结构化离线摘录`, 0.8, 5.65, 11.7, 0.35, { size: 11, color: C.slate });
   slides.push(data);
 
@@ -107,16 +113,26 @@ function buildSlides(run: ResearchRun) {
 
   const sources = new SlideBuilder(C.white);
   sources.header("Traceability", "来源、定位与最终责任", 5);
-  run.sources.slice(0, 5).forEach((source, index) => {
-    const y = 1.55 + index * 0.95;
-    sources.text(`[S${index + 1}]`, 0.75, y, 0.55, 0.25, { size: 11, color: C.cyan, bold: true });
-    sources.text(source.title, 1.45, y, 7.45, 0.3, { size: 12, bold: true });
+  const compactSources = run.sources.length > 5;
+  run.sources.forEach((source, index) => {
+    const column = compactSources ? Math.floor(index / 5) : 0;
+    const row = compactSources ? index % 5 : index;
+    const x = compactSources ? 0.72 + column * 6.15 : 0.75;
+    const y = compactSources ? 1.52 + row * 0.82 : 1.55 + row * 0.95;
+    sources.text(`[S${index + 1}]`, x, y, 0.55, 0.25, { size: compactSources ? 9 : 11, color: C.cyan, bold: true });
+    sources.text(source.title, x + 0.7, y, compactSources ? 5.0 : 7.45, compactSources ? 0.27 : 0.3, { size: compactSources ? 10 : 12, bold: true });
     const locator = source.locator.url ?? `${source.locator.fileName ?? ""}${source.locator.page ? ` · p.${source.locator.page}` : ""}${source.locator.rows ? ` · rows ${source.locator.rows.join(",")}` : ""}`;
-    sources.text(locator, 1.45, y + 0.36, 8.4, 0.22, { size: 8, color: C.slate });
+    sources.text(locator, x + 0.7, y + (compactSources ? 0.31 : 0.36), compactSources ? 5.0 : 8.4, compactSources ? 0.18 : 0.22, { size: compactSources ? 7 : 8, color: C.slate });
   });
-  sources.rect(9.65, 1.55, 2.85, 3.9, C.navy, C.navy, true);
-  sources.text("AI 生成候选判断\n\n确定性规则审计\n\n人确认最终结论", 10.05, 2.05, 2.05, 2.7, { size: 16, color: C.white, bold: true, align: "ctr" });
-  sources.text("未确认内容不冒充最终结论", 9.85, 5.75, 2.45, 0.35, { size: 10, color: C.red, bold: true, align: "ctr" });
+  if (compactSources) {
+    sources.rect(0.75, 5.82, 11.75, 0.62, C.navy, C.navy, true);
+    sources.text("AI 生成候选判断 → 确定性规则审计 → 人确认最终结论", 1.0, 5.99, 8.6, 0.23, { size: 11, color: C.white, bold: true, align: "ctr" });
+    sources.text("未确认内容不冒充最终结论", 9.75, 5.99, 2.45, 0.23, { size: 9, color: C.red, bold: true, align: "ctr" });
+  } else {
+    sources.rect(9.65, 1.55, 2.85, 3.9, C.navy, C.navy, true);
+    sources.text("AI 生成候选判断\n\n确定性规则审计\n\n人确认最终结论", 10.05, 2.05, 2.05, 2.7, { size: 16, color: C.white, bold: true, align: "ctr" });
+    sources.text("未确认内容不冒充最终结论", 9.85, 5.75, 2.45, 0.35, { size: 10, color: C.red, bold: true, align: "ctr" });
+  }
   slides.push(sources);
   return slides;
 }

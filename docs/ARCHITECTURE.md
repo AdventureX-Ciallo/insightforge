@@ -27,7 +27,7 @@ DELIVER ── interactive report + editable PPTX + evidence JSON
 
 ## Runtime
 
-The application is a local TypeScript monolith on Node.js 20+:
+The application is a local TypeScript monolith on Node.js `^20.19.0 || ^22.12.0 || >=23`:
 
 - `src/engine.ts` owns orchestration and step-output chaining.
 - `src/domain.ts` owns machine-readable types and Zod validation.
@@ -83,13 +83,25 @@ Any prior confirmation for that conclusion is revoked and recorded. Unrelated ch
 
 ## Persistence and failure
 
-The server returns `202` immediately and runs the pipeline in the background. Every `running`, `success`, or `failed` snapshot is persisted. Browser refresh restores `current.json`; process restart reloads the completed run. A failed step is marked `failed`, later steps remain `pending`, and no `DELIVERED` state is possible.
+The server returns `202` immediately and runs the pipeline in the background. Every `running`, `success`, or `failed` snapshot is persisted. State JSON uses same-directory temporary files plus atomic rename; a completed run writes its immutable `run.json` before replacing `current.json`. Browser refresh restores `current.json`; process restart validates both current and run snapshots, repairs a missing/truncated current pointer from the newest valid run, and converts any valid in-flight progress record into an explicit failed/interrupted job instead of leaving an orphaned `running` task. It refuses unrecoverable corruption instead of reporting an empty workspace. A failed step is marked `failed`, later steps remain `pending`, and no `DELIVERED` state is possible.
+
+Run admission reserves capacity synchronously before upload verification: at most two pipelines may execute, and excess requests receive 429 plus `Retry-After`. A single publication queue keeps concurrent completion, `current.json`, and in-memory current state consistent. Terminal maintenance retains at most ten generated run IDs in memory and on disk, deleting each evicted progress file together with its run/artifact directory while protecting the current and all running IDs; uploads and non-run workspace data are outside this cleanup.
+
+Artifact downloads check the registered path and current file existence before headers, then use Node stream `pipeline`; open/read failures and client disconnects destroy only that response and are always observed, so no unhandled stream error can terminate the process.
+
+SSE initial replay, step/tool events, heartbeats, and terminal messages share one fail-soft write boundary: connection state is checked before writes, synchronous stream errors are isolated, and a response `error` event removes that subscriber. Admission is capped at four subscribers per run and six globally; excess streams receive typed 429 responses. A stream with no new step/tool event for 60 seconds receives `stream-end: idle-timeout` and closes so sockets and heartbeat timers cannot accumulate indefinitely. Disconnect, capacity rejection, and idle expiry never cancel the research run.
+
+The default server entry loads an optional repository-root `.env` before resolving listener, DNS, and model settings. Exported process variables take precedence; a missing file preserves offline defaults, while a present but unreadable file fails startup explicitly.
+
+Build output is runtime-complete for required read-only assets: `copy-static` refreshes `dist/public`, `dist/fixtures/golden`, and a minimal ESM runtime manifest containing only production dependencies. The server derives asset paths from `import.meta.url`, not `process.cwd()`, and checks every required UI, fixture, prompt, and authenticated cache file before opening its listener. Source-mode execution resolves the repository assets; a compiled or renamed bundle resolves assets beside its own server module.
+
+PPTX packages intentionally record their creation/modification wall-clock time in OOXML core properties, so two equivalent exports are not promised to be byte-identical. Deterministic formulas, evidence links, slide count and on-canvas editable shapes are tested; ArtifactRecord SHA-256 authenticates each actual generated version.
 
 ## Security
 
 - Fixed tool allowlist; no arbitrary command, URL crawler, model-selected URL, or filesystem tool.
 - All fixtures and artifacts resolve inside configured roots.
-- Upload validation accepts only PDF/CSV/XLSX/TXT up to 5 MiB. It validates normalized filenames and raw bytes, assigns a UUID name, uses `0700` directories plus `0600` temporary files and atomic rename, and stores strict metadata. POST verifies the persisted digest; GET revalidates metadata, path, regular-file status, size and SHA-256. The browser independently hashes its selected file and compares POST and GET receipts.
+- Upload validation accepts only PDF/CSV/XLSX/TXT up to 5 MiB. It validates normalized filenames and raw bytes, assigns a UUID name, uses `0700` directories plus `0600` temporary files and atomic rename, and stores strict metadata. All upload writes for one workspace are serialized around a 20-object/32-MiB aggregate quota check; actual file and record bytes, including malformed/orphaned entries, remain quota-visible. Records carry a 24-hour expiry, and startup, subsequent writes, or expired reads remove the record/file pair. POST verifies the persisted digest; GET revalidates expiry, metadata, path, regular-file status, size and SHA-256. The browser independently hashes its selected file and compares POST and GET receipts.
 - The HTTP listener is fail-closed to loopback hosts; non-loopback configuration is rejected before `listen()`.
 - Static responses include a restrictive CSP, `nosniff`, no-referrer and disabled camera/microphone/geolocation.
 - Source text uses `textContent`, never `innerHTML`.

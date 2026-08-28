@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { runGoldenCase, type WorkflowState } from "../src/index.js";
+import { runGoldenCase, workflowStates, type WorkflowState } from "../src/index.js";
 
 const question = "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？";
 const config = { baseUrl: "https://model.example.test/v1", model: "test", apiKey: "test-secret" };
@@ -14,7 +14,7 @@ async function workspace(prefix: string) {
 }
 
 test("every injected workflow failure remains terminally fail-closed and non-Error progress failures are preserved", async () => {
-  for (const state of ["PLAN", "SYNTHESIZE", "AUDIT", "DELIVER"] as WorkflowState[]) {
+  for (const state of workflowStates as readonly WorkflowState[]) {
     let observed = [] as Array<{ state: string; status: string; error: string | null }>;
     await assert.rejects(runGoldenCase({
       researchQuestion: question,
@@ -25,9 +25,19 @@ test("every injected workflow failure remains terminally fail-closed and non-Err
       stepDelayMs: state === "PLAN" ? 1 : 0,
       onProgress: (steps) => { observed = steps; },
     }), new RegExp(`Injected ${state} failure`, "u"));
-    assert.equal(observed.find((step) => step.state === state)?.status, "failed");
-    assert.ok(observed.filter((step) => step.state !== state && step.status === "pending").length >= 0);
+    const failedIndex = workflowStates.indexOf(state);
+    assert.deepEqual(observed.map((step) => step.status), workflowStates.map((_step, index) => index < failedIndex ? "success" : index === failedIndex ? "failed" : "pending"));
   }
+
+  let failureProgressCalls = 0;
+  await assert.rejects(runGoldenCase({
+    researchQuestion: question,
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir: await workspace("insightforge-failure-progress-root-"),
+    llmMode: "off",
+    failAt: "PLAN",
+    onProgress: () => { failureProgressCalls += 1; if (failureProgressCalls === 2) throw new Error("secondary progress failure"); },
+  }), /Injected PLAN failure/u);
 
   await assert.rejects(runGoldenCase({
     researchQuestion: question,
@@ -47,7 +57,19 @@ test("v2 source selection executes the final-input branch through DELIVER", asyn
     llmMode: "off",
   });
   assert.equal(run.sourceVersion, "v2");
+  assert.equal(run.synthesisMode, "DETERMINISTIC_GOLDEN_RULES");
   assert.match(run.sources.find((item) => item.id === "source-market-csv")!.locator.url!, /gov\.cn/u);
+});
+
+test("default cached mode rejects a fresh golden v2 run early with the supported update path", async () => {
+  const workspaceDir = await workspace("insightforge-cached-v2-boundary-");
+  await assert.rejects(runGoldenCase({
+    researchQuestion: question,
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir,
+    sourceVersion: "v2",
+  }), /cached model output is scoped to golden source v1.*applySourceUpdate/iu);
+  assert.deepEqual(await readdir(workspaceDir), []);
 });
 
 test("engine rejects a run that would exceed the ten-source product boundary before reading uploads", async () => {

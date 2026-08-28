@@ -12,6 +12,21 @@ function responseWithUrl(body: BodyInit | null, init: ResponseInit, url: string)
   return response;
 }
 
+function endlessChunkedResponse(contentType: string, chunkBytes: number) {
+  const state = { pulls: 0, cancelled: false };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      state.pulls += 1;
+      if (state.pulls > 20) throw new Error("reader failed to stop after the safety limit");
+      controller.enqueue(new Uint8Array(chunkBytes));
+    },
+    cancel() {
+      state.cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  return { response: new Response(body, { headers: { "content-type": contentType } }), state };
+}
+
 test("public search URL validation rejects every pre-fetch SSRF and DNS boundary", async () => {
   assert.equal(isBlockedIpAddress("not-an-ip"), true);
   assert.equal(isBlockedIpAddress("[fe80::1%en0]"), true);
@@ -47,6 +62,16 @@ test("search candidate parsing drops malformed, credentialed, private, duplicate
   assert.equal(candidates.filter((item) => item.url === "https://example.net/report").length, 1);
 });
 
+test("search candidate parsing replaces out-of-range numeric entities instead of throwing", () => {
+  const candidates = parseSearchCandidates(
+    '<a href="https://example.com/report">Title &#65; &#55296; &#999999999999999999999999;</a>',
+    "google",
+    new URL("https://www.google.com/search?q=test"),
+  );
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.title, "Title A � �");
+});
+
 test("selected search engine rejects query, response, redirect, content type, declared size, and actual size failures", async () => {
   await assert.rejects(searchSelectedEngine("bing", " ", async () => new Response(""), publicResolver), /2–160/u);
   await assert.rejects(searchSelectedEngine("bing", "x".repeat(161), async () => new Response(""), publicResolver), /2–160/u);
@@ -76,4 +101,22 @@ test("single-provider live search rejects all transport envelopes and preserves 
   assert.equal(result.query, "valid");
   assert.equal(result.results[0]?.publishedAt, null);
   assert.equal(result.results[0]?.excerpt, 'A "B" \'C\' & D');
+});
+
+test("search readers cancel chunked responses immediately when the byte limit is crossed", async () => {
+  const selected = endlessChunkedResponse("text/html", 300 * 1024);
+  await assert.rejects(
+    searchSelectedEngine("bing", "valid", async () => selected.response, publicResolver),
+    /size limit/u,
+  );
+  assert.equal(selected.state.cancelled, true);
+  assert.equal(selected.state.pulls, 4, "the 1 MiB reader must stop on the first over-limit chunk");
+
+  const live = endlessChunkedResponse("application/json", 200 * 1024);
+  await assert.rejects(
+    searchLiveSingleProvider("valid", async () => live.response, publicResolver),
+    /safety limit/u,
+  );
+  assert.equal(live.state.cancelled, true);
+  assert.equal(live.state.pulls, 3, "the 512 KiB reader must stop on the first over-limit chunk");
 });

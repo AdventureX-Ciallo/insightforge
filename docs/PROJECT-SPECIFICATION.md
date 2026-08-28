@@ -43,7 +43,7 @@ InsightForge 是证据原生的行业研究 Agent。它不是回答问题的聊�
 
 ## 计划技术架构
 
-- Node.js 20+ / TypeScript 本地单体服务。
+- Node.js `^20.19.0 || ^22.12.0 || >=23` / TypeScript 本地单体服务。
 - Zod/JSON Schema 运行时合同。
 - PDF.js 逐页解析。
 - CSV 确定性公式计算。
@@ -122,4 +122,4 @@ InsightForge 是证据原生的行业研究 Agent。它不是回答问题的聊�
 
 ## 发布状态
 
-当前仅为隔离 worktree 的本地未提交修改，包括历史原型和本轮产品文档。没有 commit、push、PR、Tag、部署、数据库迁移或生产配置变更。
+本轮后端收口已获授权提交并推送 `main`。没有 PR、Tag、部署、数据库迁移或生产配置变更。

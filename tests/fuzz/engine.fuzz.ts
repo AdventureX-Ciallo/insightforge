@@ -50,6 +50,10 @@ export async function runEngineFuzz(rng: SeededPrng, cases: number) {
       invariant(terminalStatuses.includes(run.terminalStatus), `case=${index}: terminal status escaped the three-state contract`);
       invariant(run.steps.every((step) => step.status === "success"), `case=${index}: successful run contains a non-success step`);
       assertConsumptionChain(run.steps);
+      if (question !== GOLDEN) {
+        invariant(run.data.length === 1 && run.data[0]?.id === "datum-question-evidence-fit", `case=${index}: mismatch run retained golden-domain data rows`);
+        invariant(!/datum-(?:reported-penetration|penetration|charger-growth|adequacy-estimate)|新能源|乘用车|充电|渗透率/u.test(JSON.stringify(run.data)), `case=${index}: mismatch data leaked golden-domain identifiers or terms`);
+      }
       baseline ??= run;
     } catch (error) {
       invariant(failAt !== undefined, `case=${index}: non-injected run failed: ${String(error)}`);

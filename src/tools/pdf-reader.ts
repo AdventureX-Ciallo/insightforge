@@ -3,9 +3,16 @@ import { basename } from "node:path";
 
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
-export async function readPdfPages(path: string) {
-  const bytes = new Uint8Array(await readFile(path));
+export const MAX_PDF_PAGES = 100;
+
+export function assertPdfPageCount(pageCount: number) {
+  if (!Number.isSafeInteger(pageCount) || pageCount < 1) throw new Error("PDF contains an invalid page count");
+  if (pageCount > MAX_PDF_PAGES) throw new Error(`PDF exceeds the ${MAX_PDF_PAGES}-page parsing limit`);
+}
+
+export async function readPdfPagesBytes(bytes: Uint8Array, fileName: string) {
   const document = await getDocument({ data: bytes, useSystemFonts: true }).promise;
+  assertPdfPageCount(document.numPages);
   const pages: Array<{ page: number; text: string }> = [];
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
@@ -18,5 +25,9 @@ export async function readPdfPages(path: string) {
       .trim();
     pages.push({ page: pageNumber, text });
   }
-  return { fileName: basename(path), pages };
+  return { fileName, pages };
+}
+
+export async function readPdfPages(path: string) {
+  return readPdfPagesBytes(new Uint8Array(await readFile(path)), basename(path));
 }

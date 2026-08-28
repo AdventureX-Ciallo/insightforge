@@ -25,25 +25,25 @@
 
 ## 技术栈与关键实现
 
-- Node.js 20+、TypeScript、Zod 严格合同。
+- Node.js `^20.19.0 || ^22.12.0 || >=23`、TypeScript、Zod 严格合同。
 - PDF.js 读取 PDF 正文并保留页码；CSV 执行可复算的确定性计算。
 - JSZip 直接生成文字和形状可编辑的 PowerPoint OOXML。
 - PDF 报告采用纯 Node 的确定性 CID/ActualText 导出，不依赖 Python、ReportLab 或浏览器打印。
 - 本地 loopback HTTP 服务；所有任务写操作按 `runId` 串行化，避免人工编辑与来源更新并发覆盖。
 - 后端 SSE 已就绪：可流式输出五状态、工具事件、心跳和终态，并完成 run 隔离与断开清理；当前前端仍通过轮询刷新，不能声称已经消费 SSE。
 - 统一 `MAX_SOURCES=10`：三搜索引擎、单提供方搜索、离线快照、COLLECT 和证据包共同执行上限；第 11 个信源被截断并留下机器记录。
-- `npm run contract:check` 启动临时 loopback 服务，逐项真实调用联调契约并输出 PASS/FAIL 清单和 JSON 报告。
+- `npm run contract:check` 启动临时 loopback 服务，逐项真实调用联调契约并输出 PASS/FAIL 清单和 JSON 报告；标准 `npm run verify` 已强制包含该命令及确定性 fuzz，二者仍可单独重跑以生成各自报告。
 
 ## 可验证质量数字
 
 | 项目 | 当前证据 |
 |---|---|
-| Node 测试 | 97/97 PASS |
+| Node 测试 | 158/158 PASS |
 | 覆盖率 | `src/**` 语句、分支、函数、行四项均 100% |
-| Seeded fuzz | 522,030 例；5,219 行生产 TypeScript；100.02 例/行 |
-| 浏览器 E2E | 真实 Chromium 黄金路径通过 |
-| 稳定演示 | 黄金案例连续三次成功 |
-| 联调合同 | `npm run contract:check` 覆盖 SSE、presets、run、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、搜索合同及四格式下载 |
+| Seeded fuzz | 685,000 例；6,840 行生产 TypeScript；100.15 例/行 |
+| 浏览器 E2E | 1/1 PASS；非默认端口真实 Chromium 黄金路径与下载 PPTX 解析通过，4.7 s |
+| 稳定演示 | 黄金案例连续三次成功（88/20/16 ms） |
+| 联调合同 | 23/23 PASS；`npm run contract:check` 覆盖 SSE、presets、run、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、搜索合同及四格式下载 |
 | 安全 | loopback、上传字节/路径/SHA、工具白名单、提示词注入、SSRF 预检和密钥扫描均有门禁 |
 
 ## 核心创新
@@ -78,7 +78,7 @@
 - 灾备 PPTX：`demo-assets/insightforge-golden-fallback.pptx`
 - PowerPoint 验证文件：`docs/assets/insightforge-office-valid.pptx`、`docs/assets/insightforge-office-edit-check.pptx`
 - 实时权威核验截图：`docs/assets/insightforge-live-check.png`
-- GitHub 仓库：`https://github.com/AdventureX-Ciallo/evoforge-q4`
+- GitHub 仓库：`https://github.com/AdventureX-Ciallo/insightforge`
 - 最终发布 Tag：前端冻结并获得发布授权后设置 `#shenicest-fission`
 
 ## 后续计划

@@ -22,7 +22,7 @@
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
 | 3 个预设案例卡片（1 黄金 + 2 非黄金） | `GET /api/presets` → `[{id, question, kind: "golden"|"boundary", description}]` | 黄金案例全链路成功；两个边界案例进入失配路径并返回证据缺口（复用失配综合） |
-| 自定义问题输入 | `POST /api/runs {researchQuestion}`（现有，8–240 字符校验） | 不变 |
+| 自定义问题输入 | `POST /api/runs {researchQuestion}`（8–240 字符校验） | 最多并行 2 个任务；超限返回 429 `RUN_CAPACITY_EXCEEDED` 与 `Retry-After: 1`；内存和磁盘只保留最近 10 个 run，当前/执行中任务不淘汰 |
 
 ## 路径 2：任务进度页 — 全节点实时展示
 
@@ -31,6 +31,7 @@
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
 | 五状态轨道（PLAN→COLLECT→SYNTHESIZE→AUDIT→DELIVER），每节点 pending/running/success/failed | `GET /api/runs/:id` 轮询（现有 `RunStep[]`）；模型阶段在 events 中以 `llm-planner`/`llm-synthesizer` 工具事件出现 | 每步输出哈希被下一步消费；失败传播不误报成功（现有测试覆盖） |
+| SSE 实时流（可选，轮询仍是当前前端基线） | `GET /api/runs/:id/events`；每 run 最多 4 路、全局 6 路，超限 429 `SSE_CAPACITY_EXCEEDED`；60 秒无 step/tool 后以 `stream-end {reason:"idle-timeout", reconnect:true}` 断流 | 断流只释放订阅资源，后台任务继续；客户端可回退轮询或重连 |
 | 每个工具调用的 inputSummary/时长/状态 | `run.events[]`（七字段完整） | 事件数 = 真实调用数，无装饰性条目 |
 | 信源读取明细（URL/PDF 页码/CSV 行号） | `run.sources[]` + `run.evidence[]` 定位字段 | 100% 引用可定位（现有 P0-04 测试） |
 
@@ -41,7 +42,7 @@
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
 | 六类审查发现（引用缺失/无支撑/冲突/类型/假设/越界）高亮在结论卡片 | `run.auditFindings[]`（before/after 差异字段） | 审查读取真实输入：改变证据/数值后发现随之变化（audit-input 测试族） |
-| 确认 / 驳回 / 编辑（编辑保留 AI 原文） | `POST /api/runs/:id/decisions`（现有） | INSUFFICIENT/STALE 禁止确认；人工动作产生新版本（见路径 5） |
+| 确认 / 驳回 / 编辑（编辑保留 AI 原文） | `POST /api/runs/:id/decisions`（现有） | INSUFFICIENT/STALE 禁止确认（409）；未知结论 404；非法/空编辑或缺少冲突确认边界 400；成功人工动作才产生新版本（见路径 5） |
 
 ## 路径 4：边界验证 — 证据缺口的诚实展示
 
@@ -67,7 +68,7 @@
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
 | 引擎选择（百度 / Google / Bing） | `POST /api/sources/search {engine, query}` → 候选信源列表（URL/标题/引擎标识）；结果仅为候选来源，解析建模前不构成证据（路线图 P2-5） | 服务端仅发 http/https、请求前校验 host、拒绝环回/私有/保留地址、目标域限引擎白名单（SSRF 测试族） |
-| v1→v2 更新影响链（受影响对象列表、确认失效、重算） | `POST /api/runs/:id/source-update`（现有）+ 受影响对象清单 | 不相关结论不变；确认撤销留痕（现有 P0-09 测试） |
+| v1→v2 更新影响链（受影响对象列表、确认失效、重算） | `POST /api/runs/:id/source-update` + 后端持久化的受影响对象清单；同时支持黄金问题的缓存模型与在线单端点运行，按实际 Evidence→Datum→Claim→Conclusion 关系解析动态 ID | 不相关结论不变；确认撤销留痕；刷新/重启后状态仍在；同一 run 重复更新返回 409“来源已在 v2”，非黄金任务返回 422“仅适用于内置黄金案例” |
 | 调整逻辑说明 | 冲突解释保持 CANDIDATE_EXPLANATION 状态 | 不静默选值、不求平均（现有测试） |
 
 ## 横切能力 A：自定义白名单上传
@@ -76,7 +77,7 @@
 
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
-| 上传入口（PDF/CSV/XLSX，5MiB 限制） | `POST /api/uploads`；请求头 `x-insightforge-file-name` 必须填写经 `encodeURIComponent` URL 编码的文件名（现有：类型/字节/路径校验，落盘 0600，SHA-256 回执） | 伪造 MIME、路径穿越、NUL、超限全部拒绝（现有测试） |
+| 上传入口（PDF/CSV/XLSX/TXT，单文件 5 MiB） | `POST /api/uploads`；请求头 `x-insightforge-file-name` 必须填写经 `encodeURIComponent` URL 编码的文件名；类型/字节/路径校验后落盘 0600，并返回 SHA-256 与 `expiresAt`；同工作区最多 20 个对象/32 MiB，24 小时 TTL | 伪造 MIME、路径穿越、NUL、单文件或聚合超限全部拒绝；并发上传不能绕过配额；过期 GET 返回 410 并清理文件/记录对 |
 | 上传文件进入信源体系 | 上传解析为自定义白名单信源并进入 COLLECT 候选（路线图 P3-7） | 上传→解析→候选信源的全链路测试；解析失败如实报错不降级为忽略 |
 
 ## 横切能力 B：模型端点配置切换

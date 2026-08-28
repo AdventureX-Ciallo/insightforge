@@ -10,6 +10,7 @@ evidence/
 .insightforge/
 artifacts/
 coverage/
+coverage-detail/
 .cache/
 *.log
 demo-assets/.recordings/

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import JSZip from "jszip";
 
+import { runGoldenCase } from "../src/engine.js";
 import { createInsightForgeServer } from "../src/server.js";
 
 async function completedRun(baseUrl: string, runId: string) {
@@ -29,10 +31,11 @@ test("a validated upload is consumed by COLLECT in the same five-state run", asy
   const baseUrl = await app.start(0, "127.0.0.1");
   try {
     const bytes = await readFile(resolve("fixtures/golden/market-brief.pdf"));
+    const expectedSha256 = createHash("sha256").update(bytes).digest("hex");
     const uploaded = await fetch(`${baseUrl}/api/uploads`, {
       method: "POST",
       headers: { "content-type": "application/pdf", "x-insightforge-file-name": encodeURIComponent("评委补充材料.pdf") },
-      body: bytes,
+      body: new Uint8Array(bytes),
     });
     assert.equal(uploaded.status, 201);
     const uploadId = ((await uploaded.json()) as { upload: { id: string } }).upload.id;
@@ -51,11 +54,11 @@ test("a validated upload is consumed by COLLECT in the same five-state run", asy
     assert.deepEqual(uploadedSource.customWhitelist, {
       uploadId,
       originalFileName: "评委补充材料.pdf",
-      sha256: uploadedSource.customWhitelist?.sha256,
+      sha256: expectedSha256,
       parsedKind: "PDF",
       status: "PARSED",
     });
-    assert.match(uploadedSource.customWhitelist.sha256, /^[a-f0-9]{64}$/u);
+    assert.equal(uploadedSource.customWhitelist.sha256, expectedSha256);
     assert.ok(run.evidence.some((item) => item.sourceId === uploadedSource.id && item.locator.fileName && item.locator.page === 1));
   } finally {
     await app.stop();
@@ -75,7 +78,7 @@ test("a byte-valid but structurally unreadable whitelist upload fails COLLECT in
     const uploaded = await fetch(`${baseUrl}/api/uploads`, {
       method: "POST",
       headers: { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "x-insightforge-file-name": "empty.xlsx" },
-      body: bytes,
+      body: new Uint8Array(bytes),
     });
     assert.equal(uploaded.status, 201);
     const uploadId = ((await uploaded.json()) as { upload: { id: string } }).upload.id;
@@ -96,4 +99,23 @@ test("a byte-valid but structurally unreadable whitelist upload fails COLLECT in
   } finally {
     await app.stop();
   }
+});
+
+test("COLLECT hashes the exact upload bytes it parses and rejects post-validation changes", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-upload-toctou-"));
+  const path = join(workspaceDir, "changed.txt");
+  await writeFile(path, "bytes changed after the API verification step", "utf8");
+  await assert.rejects(runGoldenCase({
+    researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir,
+    uploadedFiles: [{
+      id: "00000000-0000-4000-8000-000000000001",
+      kind: "TXT",
+      originalFileName: "changed.txt",
+      path,
+      sha256: "0".repeat(64),
+      uploadedAt: new Date().toISOString(),
+    }],
+  }), /changed after validation/u);
 });

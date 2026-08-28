@@ -8,11 +8,18 @@ import JSZip from "jszip";
 
 import {
   MAX_UPLOAD_SIZE_BYTES,
+  UploadValidationError,
   sanitizeUploadFileName,
   validateUpload,
   validateUploadBytes,
 } from "../src/tools/upload-validator.js";
 import { readLocalFile } from "../src/tools/local-file-reader.js";
+import {
+  assertXlsxContainerLimits,
+  MAX_XLSX_ENTRIES,
+  MAX_XLSX_ENTRY_UNCOMPRESSED_BYTES,
+  MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES,
+} from "../src/tools/xlsx-container.js";
 
 const allowedRoot = resolve(".insightforge-test-uploads");
 
@@ -32,6 +39,27 @@ async function minimalXlsx() {
   zip.file("_rels/.rels", "<Relationships/>");
   zip.file("xl/workbook.xml", "<workbook/>");
   return zip.generateAsync({ type: "uint8array" });
+}
+
+function forgeCentralDirectorySizes(bytes: Uint8Array, sizes: Readonly<Record<string, number>>) {
+  const output = Buffer.from(bytes);
+  const signature = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
+  const patched = new Set<string>();
+  let offset = 0;
+  while ((offset = output.indexOf(signature, offset)) !== -1) {
+    const nameLength = output.readUInt16LE(offset + 28);
+    const extraLength = output.readUInt16LE(offset + 30);
+    const commentLength = output.readUInt16LE(offset + 32);
+    const name = output.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    const size = sizes[name];
+    if (size !== undefined) {
+      output.writeUInt32LE(size, offset + 24);
+      patched.add(name);
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  assert.deepEqual([...patched].sort(), Object.keys(sizes).sort());
+  return output;
 }
 
 test("byte validator accepts the four allowed upload formats", async () => {
@@ -98,6 +126,53 @@ test("upload metadata and byte validation cover empty MIME, numeric bounds, unsa
   await assert.rejects(validateUploadBytes(candidate("pdf.txt", "text/plain", pdf), pdf), /binary file signature/u);
   const zipBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x41]);
   await assert.rejects(validateUploadBytes(candidate("zip.txt", "text/plain", zipBytes), zipBytes), /binary file signature/u);
+});
+
+test("XLSX validation and reading reject forged decompressed sizes before inflating entries", async () => {
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", "<Types/>");
+  zip.file("_rels/.rels", "<Relationships/>");
+  zip.file("xl/workbook.xml", "<workbook/>");
+  zip.file("xl/worksheets/sheet1.xml", "<worksheet/>");
+  const compressed = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  const oversizedEntry = forgeCentralDirectorySizes(compressed, {
+    "xl/worksheets/sheet1.xml": MAX_XLSX_ENTRY_UNCOMPRESSED_BYTES + 1,
+  });
+  const oversizedCandidate = candidate("bomb.xlsx", "application/zip", oversizedEntry);
+  await assert.rejects(
+    validateUploadBytes(oversizedCandidate, oversizedEntry),
+    (error: unknown) => error instanceof UploadValidationError
+      && error.statusCode === 413
+      && /entry exceeds.*decompressed size limit/u.test(error.message),
+  );
+
+  const directory = await mkdtemp(join(tmpdir(), "insightforge-xlsx-size-limit-"));
+  const path = join(directory, "bomb.xlsx");
+  await writeFile(path, oversizedEntry);
+  await assert.rejects(readLocalFile(path, "XLSX"), /entry exceeds.*decompressed size limit/u);
+
+  const aggregateNames = ["xl/a.xml", "xl/b.xml", "xl/c.xml", "xl/d.xml"];
+  for (const name of aggregateNames) zip.file(name, "x");
+  const aggregateCompressed = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  const aggregateSize = Math.floor(MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES / aggregateNames.length) + 1;
+  const aggregate = forgeCentralDirectorySizes(
+    aggregateCompressed,
+    Object.fromEntries(aggregateNames.map((name) => [name, aggregateSize])),
+  );
+  await assert.rejects(
+    validateUploadBytes(candidate("aggregate.xlsx", "application/zip", aggregate), aggregate),
+    /total decompressed size limit/u,
+  );
+
+  assert.throws(
+    () => assertXlsxContainerLimits({ files: { bad: { name: "bad", dir: false, _data: {} } } } as never),
+    /invalid uncompressed-size metadata/u,
+  );
+  const tooManyDirectories = Object.fromEntries(Array.from(
+    { length: MAX_XLSX_ENTRIES + 1 },
+    (_, index) => [`d${index}/`, { name: `d${index}/`, dir: true }],
+  ));
+  assert.throws(() => assertXlsxContainerLimits({ files: tooManyDirectories } as never), /entry limit/u);
 });
 
 test("COLLECT local-file reader extracts real XLSX cells with worksheet locators", async () => {

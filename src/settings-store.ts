@@ -45,6 +45,15 @@ export function maskApiKey(apiKey: string) {
   return `••••${apiKey.slice(-4)}`;
 }
 
+function maskSetting(value: string) {
+  return value.length < 3 ? "••••" : `${value[0]}••••${value.at(-1)}`;
+}
+
+function maskBaseUrl(baseUrl: string) {
+  const url = new URL(baseUrl);
+  return `${url.protocol}//${maskSetting(url.hostname)}`;
+}
+
 export async function loadApiLlmSettings(workspaceDir: string): Promise<LlmConfig | null> {
   const path = join(resolve(workspaceDir), "settings.json");
   let raw: string;
@@ -80,6 +89,6 @@ export function publicLlmSettings(apiConfig: LlmConfig | null, env: NodeJS.Proce
   const envConfig = resolveLlmConfig(env);
   const effective = apiConfig ?? envConfig;
   return effective
-    ? { configured: true, source: apiConfig ? "api" : "environment", baseUrl: effective.baseUrl, model: effective.model, apiKeyMasked: maskApiKey(effective.apiKey) }
-    : { configured: false, source: "none", baseUrl: null, model: null, apiKeyMasked: null };
+    ? { configured: true, source: apiConfig ? "api" : "environment", baseUrlMasked: maskBaseUrl(effective.baseUrl), modelMasked: maskSetting(effective.model), apiKeyMasked: maskApiKey(effective.apiKey) }
+    : { configured: false, source: "none", baseUrlMasked: null, modelMasked: null, apiKeyMasked: null };
 }

@@ -34,12 +34,37 @@ const QUESTION_STOPWORDS = new Set([
 
 const CJK = /[\u4e00-\u9fff]/;
 const LATIN_OR_NUMBER = /[a-z0-9]+/gi;
+const SEMANTIC_STOP_BIGRAMS = new Set([
+  "结论", "判断", "证据", "数据", "来源", "材料", "研究", "分析", "显示", "表明", "认为", "需要", "目前", "当前", "相关", "情况", "方面", "进行", "可以", "可能", "已经", "仍然", "存在",
+]);
 
 export function cjkBigrams(text: string): string[] {
   const chars = [...text].filter((ch) => CJK.test(ch));
   const grams: string[] = [];
   for (let i = 0; i < chars.length - 1; i += 1) grams.push(chars[i]! + chars[i + 1]!);
   return grams;
+}
+
+export function significantTerms(text: string): string[] {
+  const terms = new Set(cjkBigrams(text).filter((term) => !SEMANTIC_STOP_BIGRAMS.has(term)));
+  for (const match of text.match(LATIN_OR_NUMBER) ?? []) {
+    if (match.length >= 3 && !/^\d+$/u.test(match)) terms.add(match.toLowerCase());
+  }
+  return [...terms];
+}
+
+export function hasSignificantTermOverlap(left: string, right: string) {
+  const leftTerms = new Set(significantTerms(left));
+  return significantTerms(right).some((term) => leftTerms.has(term));
+}
+
+function datumValuePatterns(datum: Datum) {
+  return [...new Set([String(datum.value), datum.value.toFixed(1), datum.value.toFixed(2)])]
+    .map((value) => new RegExp(`(^|[^\\d.])${value.replace(".", "\\.")}(?=$|[^\\d.])`, "u"));
+}
+
+export function datumIsRelevantToText(datum: Datum, text: string) {
+  return hasSignificantTermOverlap(text, datum.metric) || datumValuePatterns(datum).some((pattern) => pattern.test(text));
 }
 
 export function extractQuestionTerms(question: string): string[] {
@@ -50,7 +75,7 @@ export function extractQuestionTerms(question: string): string[] {
   for (const match of question.match(LATIN_OR_NUMBER) ?? []) {
     if (match.length >= 2) terms.add(match.toLowerCase());
   }
-  return [...terms].slice(0, 12);
+  return [...terms];
 }
 
 export function evidenceCorpusText(sources: ResearchSource[], evidence: Evidence[], data: Datum[]): string {
@@ -76,22 +101,49 @@ export function planScope(question: string): string {
   return `围绕「${normalized}」展开；证据范围以本轮 PLAN→COLLECT 实际检索与解析的资料为准，所有结论仅在该范围内成立。`;
 }
 
-export interface MismatchSynthesisInputs extends DeterministicSynthesisInputs {
+export interface MismatchSynthesisInputs {
+  question: string;
   sources: ResearchSource[];
   evidence: Evidence[];
 }
 
 /**
  * 失配路径：问题与证据语料不相关时，诚实地报告证据不足，而不是把预写结论贴上问题前缀。
- * 已完成的确定性计算保留在 data 中（它们是真实计算），但结论不再引用它们作为支撑。
+ * 黄金行业的确定性计算不得进入失配任务；data 只记录问题与本轮语料的匹配率。
  */
-export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs, data: Datum[]): SynthesisBundle {
+export function buildMismatchSynthesis(inputs: MismatchSynthesisInputs): SynthesisBundle {
   const focus = inputs.question.replace(/[？?。!！\s]+/g, "").slice(0, 30) || "目标问题";
   const hint = inputs.sources.slice(0, 2).map((source) => `《${source.title}》`).join("、") || "既有资料";
   // 失配材料不能为了“覆盖率”被伪造为支撑路径；只在 Claim 文本中说明已检查范围，
   // 结论走独立 EvidenceGap 路径。
   const evidenceIds: string[] = [];
   const sourceIds: string[] = [];
+  const terms = extractQuestionTerms(inputs.question);
+  const corpus = evidenceCorpusText(inputs.sources, inputs.evidence, []).toLowerCase();
+  const matchedTerms = terms.filter((term) => corpus.includes(term)).length;
+  const fitPercent = terms.length === 0 ? 0 : Number(((matchedTerms / terms.length) * 100).toFixed(2));
+  const anchorEvidence = inputs.evidence[0];
+  const data: Datum[] = anchorEvidence ? [{
+    id: "datum-question-evidence-fit",
+    evidenceId: anchorEvidence.id,
+    metric: "研究问题与当前资料语料的词项匹配率",
+    value: fitPercent,
+    unit: "%",
+    period: "本轮研究快照",
+    type: "CALCULATION",
+    formula: "totalQuestionTerms === 0 ? 0 : matchedQuestionTerms / totalQuestionTerms * 100",
+    inputs: [
+      { label: "matchedQuestionTerms", value: matchedTerms, unit: "terms" },
+      { label: "totalQuestionTerms", value: terms.length, unit: "terms" },
+    ],
+    assumptions: [],
+    knowledgeType: "CALCULATION",
+    originType: "DETERMINISTIC",
+    freshness: "CURRENT",
+    assumptionIds: [],
+    sourceIds: inputs.sources.map((source) => source.id),
+    roundingRule: "四舍五入保留两位小数",
+  }] : [];
 
   const sharedClaim = {
     type: "AI_JUDGMENT" as const,
@@ -511,8 +563,18 @@ export function bundleFromLlmDrafts(
       assumptions.push({ id, text, value: null, unit: null, range: null, owner: "AI", evidenceStatus: "INSUFFICIENT_EVIDENCE", sourceIds: [], freshness: "CURRENT" });
       return id;
     });
-    const datumIds = collected.data.filter((datum) => draft.evidenceIds.includes(datum.evidenceId)).map((datum) => datum.id);
-    const evidenceStatus = draft.missingEvidence.length > 0 ? "INSUFFICIENT_EVIDENCE" as const : "SUPPORTED" as const;
+    const datumIds = collected.data
+      .filter((datum) => draft.evidenceIds.includes(datum.evidenceId) && datumIsRelevantToText(datum, draft.text))
+      .map((datum) => datum.id);
+    const linkedData = collected.data.filter((datum) => datumIds.includes(datum.id));
+    const hasConflict = linkedData.some((left, leftIndex) => linkedData.slice(leftIndex + 1).some((right) =>
+      left.period === right.period
+      && left.evidenceId !== right.evidenceId
+      && Math.abs(left.value - right.value) >= 1e-9
+      && hasSignificantTermOverlap(left.metric, right.metric)));
+    const evidenceStatus = draft.missingEvidence.length > 0
+      ? "INSUFFICIENT_EVIDENCE" as const
+      : hasConflict ? "CONFLICT" as const : "SUPPORTED" as const;
     const evidenceGapId = evidenceStatus === "INSUFFICIENT_EVIDENCE" ? `gap-llm-${index + 1}` : null;
     claims.push({
       id: claimId,
@@ -631,7 +693,10 @@ export function bundleFromCachedModelDrafts(
       const datum = collected.data.find((item) => item.id === datumId);
       if (!datum) throw new Error(`Cached model role ${draft.role} requires missing datum ${datumId}`);
       const rendered = datumId === "datum-adequacy-estimate" ? datum.value.toFixed(2) : datum.value.toFixed(1);
-      if (!draft.text.includes(rendered)) throw new Error(`Cached model role ${draft.role} is numerically inconsistent with ${datumId}`);
+      const escaped = rendered.replace(".", "\\.");
+      const mentioned = new RegExp(`(^|[^\\d.])${escaped}(?=$|[^\\d.])`, "u").test(draft.text);
+      const negated = new RegExp(`(?:NOT|不是|并非|不等于|≠)[^。；;,.%]{0,12}${escaped}`, "iu").test(draft.text);
+      if (!mentioned || negated) throw new Error(`Cached model role ${draft.role} is numerically inconsistent with ${datumId}`);
     }
     const evidenceGapId = draft.evidenceStatus === "INSUFFICIENT_EVIDENCE" ? `gap-${draft.role.toLowerCase().replaceAll("_", "-")}` : null;
     claims.push({

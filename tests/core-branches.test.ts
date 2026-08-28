@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { runDeterministicAudit } from "../src/audit.js";
+import { DomainError } from "../src/domain-error.js";
 import { errorText, runGoldenCase } from "../src/engine.js";
 import { applyHumanDecision, applyHumanDecisionAndPersist } from "../src/human-decision.js";
 import { applySourceUpdate } from "../src/source-update.js";
@@ -13,6 +14,7 @@ import {
   buildMismatchSynthesis,
   bundleFromCachedModelDrafts,
   bundleFromLlmDrafts,
+  extractQuestionTerms,
   questionFit,
 } from "../src/synthesis.js";
 
@@ -45,7 +47,7 @@ test("audit adds machine-readable gaps, accepts two-datum scope, and leaves clea
   unsupportedConclusion.missingEvidence = [];
   const repaired = runDeterministicAudit(unsupported, run.evidence);
   assert.ok(repaired.findings.some((item) => item.category === "UNSUPPORTED_CLAIM"));
-  assert.ok(unsupportedConclusion.missingEvidence.includes("与判断直接相关的量化数据"));
+  assert.ok(repaired.bundle.conclusions.find((item) => item.id === unsupportedConclusion.id)?.missingEvidence.includes("与判断直接相关的量化数据"));
 
   const cleanClaim = structuredClone(run.claims[0]!);
   cleanClaim.id = "claim-clean-fact";
@@ -60,7 +62,7 @@ test("audit adds machine-readable gaps, accepts two-datum scope, and leaves clea
   const cleanConclusion = { ...structuredClone(run.conclusions[0]!), id: "conclusion-clean", claimIds: [cleanClaim.id], text: "历史值为 40%" };
   const clean = runDeterministicAudit({ data: [], assumptions: [], claims: [cleanClaim], evidenceGaps: [], conclusions: [cleanConclusion], candidateRevisions: [] }, [cleanEvidence]);
   assert.ok(clean.findings.some((item) => item.category === "TYPE_MISMATCH" && item.status === "PASSED"));
-  assert.equal(cleanClaim.knowledgeType, "FACT");
+  assert.equal(clean.bundle.claims[0]?.knowledgeType, "FACT");
 
   const twoData = structuredClone(run.data.slice(0, 2));
   twoData[1]!.period = "2025";
@@ -72,6 +74,20 @@ test("audit adds machine-readable gaps, accepts two-datum scope, and leaves clea
   const forgedConclusion = { ...structuredClone(broadConclusion), id: "conclusion-forged-claim", claimIds: ["claim-does-not-exist"] };
   const forged = runDeterministicAudit({ data: [], assumptions: [], claims: [], evidenceGaps: [], conclusions: [forgedConclusion], candidateRevisions: [] }, []);
   assert.ok(forged.findings.some((item) => item.category === "SCOPE_OVERREACH" && item.status === "NEEDS_HUMAN"));
+});
+
+test("each pairwise source conflict receives a unique finding ID", async () => {
+  const run = await golden();
+  const first = structuredClone(run.data.find((item) => item.id === "datum-penetration")!);
+  const second = structuredClone(run.data.find((item) => item.id === "datum-reported-penetration")!);
+  const third = structuredClone(first);
+  third.id = "datum-third-conflicting-value";
+  third.evidenceId = run.evidence.find((item) => item.id !== first.evidenceId && item.id !== second.evidenceId)!.id;
+  third.value += 5;
+  const result = runDeterministicAudit({ data: [first, second, third], assumptions: [], claims: [], evidenceGaps: [], conclusions: [], candidateRevisions: [] }, run.evidence);
+  const conflictIds = result.findings.filter((item) => item.category === "SOURCE_CONFLICT").map((item) => item.id);
+  assert.equal(conflictIds.length, 3);
+  assert.equal(new Set(conflictIds).size, conflictIds.length);
 });
 
 test("human review rejects stale/boundary violations, keeps stale edits pending, and reaches DELIVERED only after all decisions", async () => {
@@ -106,7 +122,7 @@ test("human review rejects stale/boundary violations, keeps stale edits pending,
 test("synthesis covers empty fit/mismatch, low/v2 data, live assumptions/gaps, and cached semantic failures", async () => {
   const run = await golden();
   assert.equal(questionFit("???", "anything"), 0);
-  const mismatch = buildMismatchSynthesis({ question: "???", penetration: 1, chargerGrowth: 2, estimatedAdequacy: 3, sourceVersion: "v1", sources: [], evidence: [] }, []);
+  const mismatch = buildMismatchSynthesis({ question: "???", sources: [], evidence: [] });
   assert.match(mismatch.conclusions[0]!.text, /目标问题/u);
   assert.match(mismatch.claims[0]!.text, /既有资料/u);
   assert.ok(mismatch.evidenceGaps.some((gap) => gap.missingItems.some((item) => item.kind === "CROSS_CHECK")));
@@ -128,6 +144,7 @@ test("synthesis covers empty fit/mismatch, low/v2 data, live assumptions/gaps, a
   const chargerDraft = { role: "CHARGING_GROWTH" as const, text: `公共充电增速为 ${charger.value.toFixed(1)}%，仍需区域核验。`, evidenceIds: [charger.evidenceId], assumptionIds: [], evidenceStatus: "SUPPORTED" as const, missingEvidence: [] };
   await assert.throws(() => bundleFromCachedModelDrafts([chargerDraft], { data: run.data.filter((item) => item.id !== charger.id), assumptions: run.assumptions, sources: run.sources, evidence: run.evidence }, "snapshot"), /requires missing datum/u);
   await assert.throws(() => bundleFromCachedModelDrafts([{ ...chargerDraft, text: "数值与实际计算不一致" }], { data: run.data, assumptions: run.assumptions, sources: run.sources, evidence: run.evidence }, "snapshot"), /numerically inconsistent/u);
+  await assert.throws(() => bundleFromCachedModelDrafts([{ ...chargerDraft, text: `公共充电增速 NOT ${charger.value.toFixed(1)}%，仍需核验。` }], { data: run.data, assumptions: run.assumptions, sources: run.sources, evidence: run.evidence }, "snapshot"), /numerically inconsistent/u);
   const unknownAssumption = bundleFromCachedModelDrafts([{
     role: "CAUSALITY_GAP",
     text: "因果约束仍缺少面板数据和识别方法，当前只能标记证据不足。",
@@ -140,14 +157,51 @@ test("synthesis covers empty fit/mismatch, low/v2 data, live assumptions/gaps, a
   assert.deepEqual(unknownAssumption.evidenceGaps[0]?.missingItems.map((item) => item.kind), ["METRIC", "SCOPE", "METHOD"]);
 });
 
-test("source update refuses incomplete source and revision dependency chains", async () => {
+test("question fit keeps late terms and live synthesis pre-tags conflicting linked data", async () => {
+  const longQuestion = "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥新能源锂电池价格如何变化？";
+  const terms = extractQuestionTerms(longQuestion);
+  assert.ok(terms.length > 12);
+  assert.ok(terms.includes("锂电"));
+  assert.ok(questionFit(longQuestion, "本轮证据专门讨论锂电池价格") > 0);
+
   const run = await golden();
+  const penetration = run.data.find((item) => item.id === "datum-penetration")!;
+  const reported = run.data.find((item) => item.id === "datum-reported-penetration")!;
+  const liveConflict = bundleFromLlmDrafts([{
+    text: `2024 新能源汽车指标存在冲突：全汽车口径为 ${penetration.value}%，乘用车零售口径为 ${reported.value}%。`,
+    evidenceIds: [penetration.evidenceId, reported.evidenceId],
+    assumptions: [],
+    missingEvidence: [],
+  }], { data: run.data, sources: run.sources, evidence: run.evidence });
+  assert.deepEqual(liveConflict.claims[0]?.datumIds.sort(), [penetration.id, reported.id].sort());
+  assert.equal(liveConflict.claims[0]?.evidenceStatus, "CONFLICT");
+  assert.equal(liveConflict.conclusions[0]?.evidenceStatus, "CONFLICT");
+});
+
+test("source update reports incomplete golden dependency chains as an inapplicable client request", async () => {
+  const run = await golden();
+  const inapplicable = (error: unknown) => error instanceof DomainError
+    && error.statusCode === 422
+    && error.code === "SOURCE_UPDATE_NOT_APPLICABLE";
   const missingSource = structuredClone(run);
   missingSource.sources = missingSource.sources.filter((item) => item.id !== "source-market-csv");
-  await assert.rejects(applySourceUpdate(missingSource, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-source-")) }), /dependency chain is incomplete/u);
+  await assert.rejects(applySourceUpdate(missingSource, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-source-")) }), inapplicable);
+
+  const missingEvidence = structuredClone(run);
+  missingEvidence.evidence = missingEvidence.evidence.filter((item) => item.sourceId !== "source-market-csv");
+  await assert.rejects(applySourceUpdate(missingEvidence, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-evidence-")) }), inapplicable);
+
+  const missingDatum = structuredClone(run);
+  missingDatum.data = missingDatum.data.filter((item) => item.id !== "datum-penetration");
+  await assert.rejects(applySourceUpdate(missingDatum, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-datum-")) }), inapplicable);
+
+  const missingSourceVersion = structuredClone(run);
+  const marketSource = missingSourceVersion.sources.find((item) => item.id === "source-market-csv")!;
+  missingSourceVersion.sourceVersions = missingSourceVersion.sourceVersions.filter((item) => item.id !== marketSource.sourceVersionId);
+  await assert.rejects(applySourceUpdate(missingSourceVersion, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-version-")) }), inapplicable);
 
   const missingRevision = structuredClone(run);
   const penetration = missingRevision.conclusions.find((item) => item.id === "conclusion-penetration")!;
   missingRevision.candidateRevisions = missingRevision.candidateRevisions.filter((item) => item.id !== penetration.currentRevisionId);
-  await assert.rejects(applySourceUpdate(missingRevision, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-revision-")) }), /dependency chain is incomplete/u);
+  await assert.rejects(applySourceUpdate(missingRevision, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-revision-")) }), inapplicable);
 });

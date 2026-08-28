@@ -52,7 +52,7 @@ test("settings load fails closed for unreadable, malformed, and semantically inv
 test("public settings expose only masks and preserve API over environment priority", () => {
   const emptyEnv = Object.create(null) as NodeJS.ProcessEnv;
   assert.deepEqual(publicLlmSettings(null, emptyEnv), {
-    configured: false, source: "none", baseUrl: null, model: null, apiKeyMasked: null,
+    configured: false, source: "none", baseUrlMasked: null, modelMasked: null, apiKeyMasked: null,
   });
   const env = {
     INSIGHTFORGE_LLM_BASE_URL: "https://env.example.test/v1",
@@ -62,15 +62,22 @@ test("public settings expose only masks and preserve API over environment priori
   assert.deepEqual(publicLlmSettings(null, env), {
     configured: true,
     source: "environment",
-    baseUrl: "https://env.example.test/v1",
-    model: "env-model",
+    baseUrlMasked: "https://e••••t",
+    modelMasked: "e••••l",
     apiKeyMasked: "••••cret",
   });
   assert.deepEqual(publicLlmSettings(valid, env), {
     configured: true,
     source: "api",
-    baseUrl: valid.baseUrl,
-    model: valid.model,
+    baseUrlMasked: "https://m••••t",
+    modelMasked: "j••••l",
     apiKeyMasked: "••••1234",
+  });
+  assert.deepEqual(publicLlmSettings({ baseUrl: "https://x", model: "xy", apiKey: "12345678" }, emptyEnv), {
+    configured: true,
+    source: "api",
+    baseUrlMasked: "https://••••",
+    modelMasked: "••••",
+    apiKeyMasked: "••••5678",
   });
 });

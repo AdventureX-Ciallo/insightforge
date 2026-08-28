@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -35,6 +35,14 @@ test("a question outside the fixture domain must not produce canned EV conclusio
     "an unmatched question should honestly report insufficient evidence instead of fabricating domain conclusions",
   );
   assert.ok(run.conclusions.every((item) => item.reviewStatus !== "CONFIRMED"));
+
+  assert.deepEqual(run.data.map((item) => item.id), ["datum-question-evidence-fit"]);
+  assert.doesNotMatch(JSON.stringify(run.data), /datum-(?:reported-penetration|penetration|charger-growth|adequacy-estimate)|新能源|乘用车|充电|渗透率/u);
+  const evidenceArtifact = run.artifacts.find((item) => item.kind === "EVIDENCE_JSON");
+  assert.ok(evidenceArtifact);
+  const evidencePackage = JSON.parse(await readFile(evidenceArtifact.path, "utf8")) as { data: Array<{ id: string }> };
+  assert.deepEqual(evidencePackage.data.map((item) => item.id), ["datum-question-evidence-fit"]);
+  assert.doesNotMatch(JSON.stringify(evidencePackage.data), /datum-(?:reported-penetration|penetration|charger-growth|adequacy-estimate)|新能源|乘用车|充电|渗透率/u);
 });
 
 test("plan scope must follow the question instead of a hardcoded domain", async () => {

@@ -14,7 +14,7 @@ export interface ReportModel {
 }
 
 function markdownText(value: string) {
-  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/gu, "\\$1").replace(/\r?\n/gu, " ");
+  return value.replace(/([\\`*_{}\[\]()#+\-.!|<>])/gu, "\\$1").replace(/\r?\n/gu, " ");
 }
 
 function locatorText(locator: SourceLocator) {

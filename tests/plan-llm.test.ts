@@ -34,6 +34,7 @@ test("plans with tools outside the allowlist or missing anchors are rejected ent
     step("pptx-generator", "生成交付成果"),
   ];
   assert.equal(validatePlanSteps(hallucinated, PLAN_TOOL_ALLOWLIST), null);
+  assert.equal(validatePlanSteps([step("web-crawler", "爬取任意网站"), ...VALID_PLAN], PLAN_TOOL_ALLOWLIST), null, "one unauthorized step poisons the whole plan instead of being silently dropped");
   assert.equal(validatePlanSteps(VALID_PLAN.slice(0, 4), PLAN_TOOL_ALLOWLIST), null);
   // 交付不在最后。
   assert.equal(validatePlanSteps([VALID_PLAN[4]!, ...VALID_PLAN.slice(0, 4)], PLAN_TOOL_ALLOWLIST), null);

@@ -22,7 +22,7 @@
 | 文件 | SHA-256 | 分类 | 与原始来源的关系 | 冻结前处理 |
 |---|---|---|---|---|
 | `fixtures/golden/search-index.json` | `11c68015b7dd063803d1608e0c3181b0ab4afa6c93ed23f42564c5d28c0faac1` | 人工整理的离线搜索索引 | 摘录 O2、O4，并含一条来源预测观点；不是实时搜索结果 | 重建时保存每条摘录的抓取时间、上游 ID 和哈希 |
-| `fixtures/golden/market-brief.pdf` | `0818565f1e8f1160e75e2e4f0f411adedd3f53a3e81b82af853f3434393c8355` | 合成演示 PDF | 项目生成的两页摘要与注入诱饵，不是官方原始 PDF | UI/PPTX/JSON 标记“合成演示资料”；不得称权威原始报告 |
+| `fixtures/golden/market-brief.pdf` | `55655aa022478a82b339561a6022cea981b096ff13b44f11982db8bb4b125af4` | 合成演示 PDF | 项目生成的两页摘要与中英文注入诱饵，不是官方原始 PDF | UI/PPTX/JSON 标记“合成演示资料”；不得称权威原始报告 |
 | `fixtures/golden/market_v1.csv` | `372121cd994bc6f3b2ebae00b58ba92710743094d12ee3904567960a9ab646b0` | 待重建的派生更新样本 v1 | 11.500/31.000 对应 O0 预测；充电数据对应 O3/O4 | 冻结后改成逐行 sourceId/type/scope 的长表，不把预测标为事实 |
 | `fixtures/golden/market_v2.csv` | `f4bcdb29c2371188126963966d4d483a2d8d32ca8b2190e2c519bf4b75e4fe5d` | 待重建的派生演示表 v2 | 12.866、40.9% 对应 O1；3.579 对应 O4 | 已决定删除无必要的 `31.436` 总销量列，直接使用 O1 发布的 40.9% |
 

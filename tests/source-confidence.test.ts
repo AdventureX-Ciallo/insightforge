@@ -81,3 +81,18 @@ test("confidence scoring covers uploads, synthetic material, official candidates
   applySourceConfidence([upload], conclusions);
   assert.equal((conclusions as Array<{ confidenceDiscounts: unknown[] }>)[0]!.confidenceDiscounts.length, 1);
 });
+
+test("an OTHER source remains explicitly discounted even when its locator is complete", () => {
+  const unknown = source("https://unknown.example.test/report");
+  unknown.locator = { url: "https://unknown.example.test/report", page: 7 };
+  const confidence = scoreSourceConfidence(unknown);
+  assert.equal(confidence.category, "OTHER");
+  assert.equal(confidence.overall, 0.72);
+  assert.match(confidence.discountNote ?? "", /未验证.*OTHER.*定位完整度不等于权威性/u);
+
+  const conclusions = [{ sourceIds: [unknown.id] }] as never;
+  applySourceConfidence([unknown], conclusions);
+  const discounts = (conclusions as Array<{ confidenceDiscounts: Array<{ sourceId: string; weight: number; explanation: string }> }>)[0]!.confidenceDiscounts;
+  assert.deepEqual(discounts.map((item) => ({ sourceId: item.sourceId, weight: item.weight })), [{ sourceId: unknown.id, weight: 0.72 }]);
+  assert.match(discounts[0]!.explanation, /未验证/u);
+});

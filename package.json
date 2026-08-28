@@ -5,33 +5,38 @@
   "type": "module",
   "description": "Offline-first, evidence-native multi-step industry research agent.",
   "bin": {
-    "insightforge": "./dist/cli.js"
+    "insightforge": "./dist/server.js"
   },
   "scripts": {
     "build": "tsc && node scripts/copy-static.mjs",
     "clean": "node scripts/clean.mjs",
     "contract:check": "npm run build && node scripts/contract-check.mjs",
-    "coverage": "NODE_ENV=test c8 --include 'src/**' --all --check-coverage --lines 100 --branches 100 node --import tsx --test tests/*.test.ts",
+    "coverage": "c8 --include \"src/**\" --all --check-coverage --statements 100 --branches 100 --functions 100 --lines 100 node scripts/test-command.mjs tests",
+    "predemo": "npm run build",
     "demo": "node dist/cli.js demo",
+    "predemo:triple": "npm run build",
     "demo:triple": "node dist/cli.js triple",
     "dev": "tsx watch src/server.ts",
-    "fuzz": "tsc -p tsconfig.fuzz.json && NODE_ENV=test node --import tsx tests/fuzz/run-fuzz.ts",
-    "fuzz:report": "tsc -p tsconfig.fuzz.json && NODE_ENV=test node --import tsx tests/fuzz/run-fuzz.ts --json --report .insightforge/fuzz-report.json",
-    "lint": "tsc --noEmit",
+    "fuzz": "tsc -p tsconfig.fuzz.json && node scripts/test-command.mjs fuzz",
+    "fuzz:report": "tsc -p tsconfig.fuzz.json && node scripts/test-command.mjs fuzz --json --report .insightforge/fuzz-report.json",
+    "lint": "npm run typecheck",
     "package:source": "npm run secret-scan && node scripts/package-source.mjs",
     "record:demo": "node scripts/record-demo.mjs",
     "secret-scan": "node scripts/secret-scan.mjs",
+    "presmoke": "npm run build",
     "smoke": "node scripts/smoke.mjs",
+    "prestart": "npm run build",
     "start": "node dist/server.js",
-    "test": "NODE_ENV=test node --import tsx --test tests/*.test.ts",
+    "test": "node scripts/test-command.mjs tests",
     "test:e2e": "playwright test",
-    "typecheck": "tsc --noEmit",
-    "verify": "npm run lint && npm run coverage && npm run build && npm run secret-scan"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.tests.json",
+    "verify": "npm run lint && npm run coverage && npm run build && npm run secret-scan && npm run contract:check && npm run fuzz"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || ^22.12.0 || >=23"
   },
   "dependencies": {
+    "dotenv": "17.4.2",
     "jszip": "3.10.1",
     "pdfjs-dist": "5.4.149",
     "zod": "3.25.76"

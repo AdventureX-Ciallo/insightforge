@@ -1,4 +1,4 @@
-import { searchSelectedEngine, validatePublicHttpUrl, type SearchEngine } from "../../src/tools/search-engines.js";
+import { resolveHostnameWithFallback, searchSelectedEngine, validatePublicHttpUrl, type SearchEngine } from "../../src/tools/search-engines.js";
 import { invariant } from "./harness.js";
 import type { SeededPrng } from "./prng.js";
 
@@ -44,16 +44,35 @@ export async function runSsrfFuzz(rng: SeededPrng, cases: number) {
   const engines: readonly SearchEngine[] = ["bing", "google", "baidu"];
   for (let index = 0; index < cases; index += 1) {
     const before = fetchCalls;
+    let fallbackCalls = 0;
+    let expectedFallbackCalls: number | null = null;
     try {
-      if (rng.int(10) < 8) {
+      const variant = rng.int(12);
+      if (variant < 8) {
         await searchSelectedEngine(rng.pick(engines), `安全查询-${rng.token()}`, fetcher, async () => [{ address: reservedAddress(rng), family: rng.bool() ? 4 : 6 }]);
-      } else {
+      } else if (variant < 10) {
         await validatePublicHttpUrl(rng.pick(malformedTargets), ["www.google.com"], async () => [{ address: reservedAddress(rng), family: 4 }]);
+      } else {
+        const dangerousHop = rng.int(3);
+        expectedFallbackCalls = dangerousHop + 1;
+        const resolver = (hop: number) => async () => {
+          fallbackCalls += 1;
+          if (hop < dangerousHop) throw new Error("fuzz resolver unavailable");
+          if (hop === dangerousHop) return [{ address: reservedAddress(rng), family: rng.bool() ? 4 : 6 }];
+          return [{ address: "93.184.216.34", family: 4 }];
+        };
+        await resolveHostnameWithFallback("www.google.com", {
+          env: { INSIGHTFORGE_DNS_DOH: "1", INSIGHTFORGE_DNS_SYSTEM: "1", INSIGHTFORGE_DNS_UDP53: "1" },
+          dohResolver: resolver(0),
+          systemResolver: resolver(1),
+          traditionalResolver: resolver(2),
+        });
       }
       throw new Error(`case=${index}: SSRF target was accepted`);
     } catch (error) {
       invariant(!String(error).includes("SSRF target was accepted"), String(error));
       invariant(fetchCalls === before, `case=${index}: SSRF input reached fetch before rejection`);
+      if (expectedFallbackCalls !== null) invariant(fallbackCalls === expectedFallbackCalls, `case=${index}: dangerous DNS answer did not stop the fallback chain`);
     }
   }
   invariant(fetchCalls === 0, "SSRF fuzz made at least one outbound fetch attempt");

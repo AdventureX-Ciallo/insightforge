@@ -35,6 +35,7 @@ const graphMutations: readonly GraphMutation[] = [
   { label: "candidateRevision.conclusionId -> missing", apply: (run) => { run.candidateRevisions[0]!.conclusionId = "missing-conclusion"; } },
   { label: "artifactVersion.artifactIds -> missing", apply: (run) => { run.artifactVersions[0]!.artifactIds.push("missing-artifact"); } },
   { label: "duplicate source id", apply: (run) => { run.sources[1]!.id = run.sources[0]!.id; } },
+  { label: "research question changed without snapshot refresh", apply: (run) => { run.researchQuestion = `stale snapshot ${run.researchQuestion}`; } },
 ] as const;
 
 export async function runStructureFuzz(rng: SeededPrng, cases: number, baseline: ResearchRun) {
@@ -42,7 +43,6 @@ export async function runStructureFuzz(rng: SeededPrng, cases: number, baseline:
     if (index % 1_500 === 0) {
       const valid = structuredClone(baseline);
       valid.id = `fuzz-valid-${index}-${rng.token()}`;
-      valid.researchQuestion = `随机合法研究问题 ${rng.token(32)}`;
       valid.updatedAt = new Date(1_700_000_000_000 + rng.int(1_000_000)).toISOString();
       invariant(researchRunSchema.safeParse(valid).success, `case=${index}: generated legal ResearchRun was rejected`);
       continue;

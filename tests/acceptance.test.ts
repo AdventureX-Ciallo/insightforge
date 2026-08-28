@@ -42,10 +42,12 @@ test("every conclusion traces to locatable evidence and typed, reproducible data
   }
 
   const representedTypes = new Set([...run.evidence.map((item) => item.type), ...run.data.map((item) => item.type)]);
-  for (const required of ["FACT", "SOURCE_OPINION", "CALCULATION", "ESTIMATE"]) assert.ok(representedTypes.has(required));
+  for (const required of ["FACT", "SOURCE_OPINION", "CALCULATION", "ESTIMATE"] as const) assert.ok(representedTypes.has(required));
   const calculation = run.data.find((datum) => datum.id === "datum-penetration");
   assert.ok(calculation?.formula);
-  assert.equal(Number(((calculation.inputs[0].value / calculation.inputs[1].value) * 100).toFixed(10)), Number(calculation.value.toFixed(10)));
+  const [numerator, denominator] = calculation.inputs;
+  assert.ok(numerator && denominator);
+  assert.equal(Number(((numerator.value / denominator.value) * 100).toFixed(10)), Number(calculation.value.toFixed(10)));
   const estimate = run.data.find((datum) => datum.id === "datum-adequacy-estimate");
   assert.ok(estimate?.assumptions.length);
   assert.ok(run.conclusions.find((item) => item.id === "conclusion-penetration")?.text.includes(calculation.value.toFixed(1)));

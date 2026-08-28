@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 
-const excludedDirectories = new Set([".git", ".insightforge", "node_modules", "dist", "evidence", "test-results", "playwright-report", ".cache", ".recordings"]);
+const excludedDirectories = new Set([".git", ".insightforge", "node_modules", "dist", "coverage", "coverage-detail", "evidence", "test-results", "playwright-report", ".cache", ".recordings"]);
 
 async function walk(directory, root, output = []) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -14,14 +14,17 @@ async function walk(directory, root, output = []) {
   return output;
 }
 
-let files;
+let gitFiles = [];
 try {
-  files = execFileSync("git", ["ls-files", "-co", "--exclude-standard"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  gitFiles = execFileSync("git", ["ls-files", "-co", "--exclude-standard"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
     .split(/\r?\n/)
     .filter(Boolean);
 } catch {
-  files = await walk(process.cwd(), process.cwd());
+  // A source-only package has no Git index; the filesystem walk below remains authoritative.
 }
+// Include ignored files such as a locally created .env; Git-only scans cannot see the most
+// likely credential location. Runtime/build directories remain explicitly excluded above.
+const files = [...new Set([...gitFiles, ...await walk(process.cwd(), process.cwd())])].sort();
 const binaryExtensions = new Set([".pdf", ".png", ".jpg", ".jpeg", ".gif", ".xlsx", ".pptx", ".zip", ".webm"]);
 const forbiddenNames = new Set([".env", "cookies.json", "cookies.sqlite", "credentials.json", "id_rsa", "id_ed25519"]);
 const patterns = [

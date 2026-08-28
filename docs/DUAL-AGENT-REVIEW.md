@@ -70,7 +70,7 @@ Codex returned the compiler log and required a complete replacement patch with a
 
 The external agent reported in its process trace that strict schemas had been added, typecheck passed and targeted recovery/upload tests were 9/9. However, it ended without a replacement patch or report. After a final instruction to publish only the already-generated files or state truthfully that they did not exist, it replied: **“无修正版文件交付。”** Those process claims are not independently reproducible and are not accepted as delivery evidence.
 
-On 2026-08-28, ChatGPT Pro received a third, explicit delivery-only assignment covering SSE, the ten-source hard boundary, six seeded fuzz suites and dependency truthfulness. The protocol required three real `/mnt/data` files, hashes, `git apply --check` and an inline complete diff. That execution ended idle with no agent response and no new attachment; the conversation attachment list still contained only the old review baseline ZIP. A final publish-only message was sent, but until real bytes appear and pass isolated replay, the third attempt is recorded as **no verifiable code delivery**.
+On 2026-08-28, ChatGPT Pro received a third, explicit delivery-only assignment covering SSE, the ten-source hard boundary, seeded fuzz suites and dependency truthfulness. The protocol required three real `/mnt/data` files, hashes, `git apply --check` and an inline complete diff. That execution ended idle with no agent response and no new attachment; the conversation attachment list still contained only the old review baseline ZIP. A final publish-only message was sent, but until real bytes appear and pass isolated replay, the third attempt is recorded as **no verifiable code delivery**.
 
 ## Codex implementation and accepted influence
 
@@ -85,11 +85,11 @@ The external review usefully highlighted that an upload policy without a browser
 - unit, HTTP integration and Playwright coverage for the upload loop.
 - SSE step/tool streaming with heartbeat, disconnect cleanup and run isolation;
 - a ten-source hard cap enforced by Schema, engine and HTTP API;
-- 522,030 fixed-seed fuzz cases across six suites, including at least 6,000 complete-graph single-edge mutations;
+- 685,000 fixed-seed fuzz cases across seven suites, including at least 6,000 complete-graph single-edge mutations, output-chain/state-axis invariants, human-decision idempotency, pure Audit transforms, and DNS-fallback stop-chain checks;
 - per-run serialization of human-decision and source-update writes after E2E exposed a real lost-update race;
 - deterministic pure-Node PDF generation with no Python/ReportLab or production Chromium dependency.
 
-The current code was not obtained by accepting the failing Pro patch wholesale. It is the version that independently passes the repository typecheck, tests, production build, E2E, clean-directory replay and secret scan recorded in `docs/TEST-RESULTS.md`.
+The current code was not obtained by accepting the failing Pro patch wholesale. It independently passes the current-worktree typecheck, tests, production build, E2E and secret scan recorded in `docs/TEST-RESULTS.md`. An earlier package passed clean-directory replay, but the current worktree has changed since that package; final clean-directory replay remains intentionally deferred until the frontend freeze and must not be inferred from the old ZIP.
 
 ## Authority status
 

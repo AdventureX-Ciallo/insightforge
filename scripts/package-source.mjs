@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 import JSZip from "jszip";
+import { outputIsInsideRepository } from "./package-path.mjs";
 
 const root = process.cwd();
 const requestedOutput = process.argv[2] ?? join(root, "..", "insightforge-source.zip");
 const outputPath = resolve(requestedOutput);
 const manifestPath = `${outputPath}.manifest.json`;
 
-if (!isAbsolute(outputPath) || outputPath === root || outputPath.startsWith(`${root}${sep}`)) {
+if (outputIsInsideRepository(root, outputPath)) {
   throw new Error("Source ZIP must be written outside the repository so it cannot package itself.");
 }
 
@@ -28,6 +29,10 @@ const excludedDirectories = new Set([
   "runs",
   "test-results",
 ]);
+const excludedPaths = new Set([
+  "demo-assets",
+  "docs/assets",
+]);
 const forbiddenNames = new Set([
   ".env",
   "cookies.json",
@@ -41,6 +46,7 @@ const excludedExtensions = new Set([".log", ".webm", ".zip"]);
 function excluded(relativePath, isDirectory) {
   const segments = relativePath.split("/");
   if (segments.some((segment) => excludedDirectories.has(segment))) return true;
+  if ([...excludedPaths].some((path) => relativePath === path || relativePath.startsWith(`${path}/`))) return true;
   if (isDirectory) return false;
   const name = basename(relativePath);
   if (name === ".DS_Store") return true;
@@ -103,6 +109,7 @@ const manifest = {
   fileCount: files.length,
   exclusions: {
     directories: [...excludedDirectories].sort(),
+    paths: [...excludedPaths].sort(),
     extensions: [...excludedExtensions].sort(),
     credentialFiles: [...forbiddenNames].sort(),
     environmentFiles: ".env* except .env.example",

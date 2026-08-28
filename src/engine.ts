@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 import { persistRun, writeArtifactVersion } from "./artifacts.js";
 import { runDeterministicAudit } from "./audit.js";
 import {
+  modePresentation,
   researchRunSchema,
   workflowStates,
   type Evidence,
@@ -21,7 +22,18 @@ import {
 import { hashFile, hashValue } from "./hash.js";
 import { applySourceConfidence } from "./source-confidence.js";
 import { MAX_SOURCES, truncateSources } from "./source-limit.js";
-import { draftConclusions, draftPlanSteps, PLAN_TOOL_ALLOWLIST, resolveLlmConfig, validateLlmDrafts, validatePlanSteps, type LlmConfig } from "./llm.js";
+import {
+  draftConclusions,
+  draftPlanSteps,
+  PLAN_TOOL_ALLOWLIST,
+  promptMessagesSha256,
+  renderConclusionMessages,
+  renderPlanMessages,
+  resolveLlmConfig,
+  validateLlmDrafts,
+  validatePlanSteps,
+  type LlmConfig,
+} from "./llm.js";
 import { GOLDEN_RESEARCH_QUESTION, loadCachedModelPlan, loadCachedModelSynthesis } from "./model-cache.js";
 import {
   FIT_THRESHOLD,
@@ -35,7 +47,7 @@ import {
   type SynthesisBundle,
 } from "./synthesis.js";
 import { calculateMarketMetrics } from "./tools/csv-calculator.js";
-import { readLocalFile } from "./tools/local-file-reader.js";
+import { readLocalFileBytes } from "./tools/local-file-reader.js";
 import { readPdfPages } from "./tools/pdf-reader.js";
 import { searchSnapshot } from "./tools/snapshot-search.js";
 
@@ -52,6 +64,7 @@ export interface RunGoldenCaseOptions {
   researchQuestion: string;
   fixtureDir: string;
   workspaceDir: string;
+  /** Cached golden model output is v1-bound; use applySourceUpdate for the normal v1→v2 demo. */
   sourceVersion?: "v1" | "v2";
   failAt?: WorkflowState;
   runId?: string;
@@ -59,6 +72,7 @@ export interface RunGoldenCaseOptions {
   llmMode?: "cached" | "auto" | "off";
   llmConfig?: LlmConfig;
   uploadedFiles?: CollectedUploadInput[];
+  publishCurrent?: boolean;
   onProgress?: (steps: RunStep[]) => void | Promise<void>;
   onToolEvent?: (event: ToolCallEvent) => void | Promise<void>;
 }
@@ -184,7 +198,10 @@ async function uploadedGraph(files: CollectedUploadInput[]) {
   const sourceVersions: SourceVersion[] = [];
   const evidence: Evidence[] = [];
   for (const file of files) {
-    const parsed = await readLocalFile(file.path, file.kind);
+    const bytes = new Uint8Array(await readFile(file.path));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== file.sha256) throw new Error(`Upload ${file.id} changed after validation; COLLECT refused the bytes`);
+    const parsed = await readLocalFileBytes(bytes, file.originalFileName, file.kind);
     const sourceId = `source-upload-${file.id}`;
     const sourceVersionId = `source-version-upload-${file.id}`;
     sources.push({
@@ -224,24 +241,56 @@ async function uploadedGraph(files: CollectedUploadInput[]) {
   return { sources, sourceVersions, evidence };
 }
 
-function deterministicProvenance(mode: "DETERMINISTIC_MISMATCH_BLOCK", question: string): ModelProvenance {
+function deterministicProvenance(mode: "DETERMINISTIC_GOLDEN_RULES" | "DETERMINISTIC_MISMATCH_BLOCK", question: string): ModelProvenance {
   const digest = hashValue({ mode, question });
-  return { planSource: mode, synthesisSource: mode, provider: "InsightForge deterministic boundary", model: "none", generatedAt: isoNow(), promptSha256: digest, outputSha256: digest, cacheFile: null };
+  return {
+    planSource: mode,
+    synthesisSource: mode,
+    provider: "InsightForge deterministic boundary",
+    model: "none",
+    generatedAt: isoNow(),
+    promptSha256: digest,
+    planPromptSha256: digest,
+    synthesisPromptSha256: digest,
+    outputSha256: digest,
+    cacheFile: null,
+    routingNotice: "本轮未向第三方模型端点发送数据。",
+    dataDisclosure: modelDataDisclosure([]),
+  };
+}
+
+function modelDataDisclosure(stages: Array<"PLAN" | "SYNTHESIZE">): NonNullable<ModelProvenance["dataDisclosure"]> {
+  return {
+    externalTransfer: stages.length > 0,
+    stages,
+    sentFields: stages.length === 0 ? [] : [
+      "researchQuestion",
+      "availableInputKinds",
+      ...(stages.includes("SYNTHESIZE") ? ["sourceIdsAndTitles", "evidenceIdsTypesExcerptsAndLocatorKinds", "datumMetricsValuesUnitsPeriodsAndFormulas"] : []),
+    ],
+    omittedFields: ["credentials", "fullSourceUrls", "publisherNames", "localPaths", "uploadFileNames", "uploadHashes", "humanDecisions", "artifactBytes"],
+    limits: { researchQuestionChars: 1_000, sourceTitleChars: 160, evidenceExcerptChars: 220, formulaChars: 300 },
+  };
 }
 
 export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<ResearchRun> {
   if ((options.uploadedFiles?.length ?? 0) > MAX_RUN_UPLOADS) {
     throw new Error(`SOURCE_LIMIT_EXCEEDED: a run accepts at most ${MAX_RUN_SOURCES} sources, including at most ${MAX_RUN_UPLOADS} uploaded files`);
   }
-  const runId = options.runId ?? `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const llmMode = options.llmMode ?? "cached";
+  const sourceVersion = options.sourceVersion ?? "v1";
+  const exactGolden = options.researchQuestion === GOLDEN_RESEARCH_QUESTION;
+  if (llmMode === "cached" && sourceVersion === "v2" && exactGolden) {
+    throw new Error("Cached model output is scoped to golden source v1; create the v1 run and use applySourceUpdate for the v1→v2 demonstration, or explicitly set llmMode to off for a fresh deterministic v2 test");
+  }
+  const runId = options.runId ?? `run-${randomUUID()}`;
   await mkdir(join(options.workspaceDir, runId), { recursive: true });
   const steps = makeSteps();
   const events: ToolCallEvent[] = [];
   const createdAt = isoNow();
-  const llmMode = options.llmMode ?? "cached";
-  const exactGolden = options.researchQuestion === GOLDEN_RESEARCH_QUESTION;
   let activeStep: RunStep | undefined;
   let liveConfig: LlmConfig | undefined;
+  let livePlanPromptSha256: string | undefined;
 
   try {
     activeStep = startStep(steps, "PLAN", []);
@@ -256,7 +305,9 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       const config = options.llmConfig ?? resolveLlmConfig();
       if (!config) throw new Error("Live LLM mode requires explicit API key, base URL, and model configuration; base URL must use HTTPS");
       liveConfig = config;
-      const drafts = await recordTool(options, events, "llm-planner", "模型提出研究计划；程序随后校验工具允许列表", () => draftPlanSteps(config, { question: options.researchQuestion, availableInputs: ["离线搜索快照", "本地 PDF", "市场 CSV", ...(options.uploadedFiles ?? []).map((file) => `用户上传 ${file.kind}: ${file.originalFileName}`)] }));
+      const planContext = { question: options.researchQuestion, availableInputs: ["离线搜索快照", "本地 PDF", "市场 CSV", ...(options.uploadedFiles ?? []).map((file, index) => `用户上传 ${file.kind} 材料 ${index + 1}`)] };
+      livePlanPromptSha256 = promptMessagesSha256(renderPlanMessages(planContext));
+      const drafts = await recordTool(options, events, "llm-planner", "模型提出研究计划；程序随后校验工具允许列表", () => draftPlanSteps(config, planContext));
       const valid = validatePlanSteps(drafts, PLAN_TOOL_ALLOWLIST);
       if (!valid) throw new Error("LLM plan failed deterministic allowlist and workflow-anchor validation");
       plan = planFromDrafts(options.researchQuestion, valid);
@@ -272,7 +323,6 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     const search = await recordTool(options, events, "snapshot-search", `离线检索（明确标记缓存快照）：${options.researchQuestion}`, () => searchSnapshot(options.fixtureDir, options.researchQuestion));
     const pdfPath = join(options.fixtureDir, "market-brief.pdf");
     const pdf = await recordTool(options, events, "pdf-reader", "读取 market-brief.pdf 并保留逐页定位；来源内指令仅作材料", () => readPdfPages(pdfPath));
-    const sourceVersion = options.sourceVersion ?? "v1";
     const csvPath = join(options.fixtureDir, `market_${sourceVersion}.csv`);
     const metrics = await recordTool(options, events, "csv-calculator", `读取 ${basename(csvPath)} 并执行确定性重算`, () => calculateMarketMetrics(csvPath));
     const uploadedCount = options.uploadedFiles?.length ?? 0;
@@ -300,7 +350,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       { id: pdfSourceVersionId, sourceId: "source-pdf-brief", version: "snapshot", capturedAt: createdAt, sha256: await hashFile(pdfPath), locator: { fileName: pdf.fileName }, knowledgeType: "SOURCE_OPINION", upstreamSourceIds: [], isCurrent: true },
       { id: csvSourceVersionId, sourceId: "source-market-csv", version: sourceVersion, capturedAt: createdAt, sha256: await hashFile(csvPath), locator: sources.at(-1)!.locator, knowledgeType: "FACT", upstreamSourceIds: ["source-web-association", "source-web-charging"], isCurrent: true },
     ];
-    const evidence: Evidence[] = [
+    let evidence: Evidence[] = [
       ...web.evidence,
       { id: "evidence-pdf-page-1", sourceId: "source-pdf-brief", type: "FACT", excerpt: pdf.pages[0]!.text, locator: { fileName: pdf.fileName, page: 1 }, datumIds: ["datum-charger-growth"], knowledgeType: "FACT", originType: "SOURCE_EXTRACTED", freshness: "CURRENT" },
       { id: "evidence-pdf-page-2", sourceId: "source-pdf-brief", type: "SOURCE_OPINION", excerpt: pdf.pages[1]!.text, locator: { fileName: pdf.fileName, page: 2 }, datumIds: [], knowledgeType: "SOURCE_OPINION", originType: "SOURCE_EXTRACTED", freshness: "CURRENT" },
@@ -332,36 +382,68 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       const cached = await recordTool(options, events, "cached-model-synthesizer", "读取认证模型候选缓存并校验摘要、问题域、Schema、证据 ID 与假设 ID", () => loadCachedModelSynthesis(options.fixtureDir, options.researchQuestion, evidence.map((item) => item.id), seed.assumptions.map((item) => item.id)));
       synthesis = bundleFromCachedModelDrafts(cached.drafts, { data: seed.data, assumptions: seed.assumptions, sources, evidence }, sourceSnapshotId);
       synthesisMode = "CACHED_MODEL_OUTPUT";
-      modelProvenance = { planSource: "CACHED_MODEL_OUTPUT", synthesisSource: "CACHED_MODEL_OUTPUT", provider: cached.provenance.provider, model: cached.provenance.model, generatedAt: cached.provenance.generatedAt, promptSha256: cached.provenance.promptSha256, outputSha256: cached.provenance.outputSha256, cacheFile: cached.provenance.cacheFile };
+      modelProvenance = { planSource: "CACHED_MODEL_OUTPUT", synthesisSource: "CACHED_MODEL_OUTPUT", provider: cached.provenance.provider, model: cached.provenance.model, generatedAt: cached.provenance.generatedAt, promptSha256: cached.provenance.promptSha256, planPromptSha256: planCache!.provenance.promptSha256, synthesisPromptSha256: cached.provenance.promptSha256, outputSha256: cached.provenance.outputSha256, cacheFile: cached.provenance.cacheFile, routingNotice: "本轮读取认证模型缓存，未向第三方模型端点发送数据。", dataDisclosure: modelDataDisclosure([]) };
     } else if (llmMode === "auto" && fit >= FIT_THRESHOLD) {
       const config = liveConfig!;
+      const synthesisContext = { question: options.researchQuestion, sources, evidence, data: seed.data };
+      const synthesisPromptSha256 = promptMessagesSha256(renderConclusionMessages(synthesisContext));
       let valid: ReturnType<typeof validateLlmDrafts> = [];
       for (let attempt = 1; attempt <= 2 && valid.length < 3; attempt += 1) {
-        const drafts = await recordTool(options, events, "llm-synthesizer", `单一端点模型提出候选（有界传输尝试 ${attempt}/2）`, () => draftConclusions(config, { question: options.researchQuestion, sources, evidence, data: seed.data }));
+        const drafts = await recordTool(options, events, "llm-synthesizer", `单一端点模型提出候选（有界传输尝试 ${attempt}/2）`, () => draftConclusions(config, synthesisContext));
         valid = validateLlmDrafts(drafts, evidence.map((item) => item.id));
       }
       if (valid.length < 3) throw new Error("Live model produced fewer than three schema-valid, evidence-linked candidates");
       synthesis = bundleFromLlmDrafts(valid, { data: seed.data, sources, evidence });
       synthesis.assumptions.push(...seed.assumptions);
       synthesisMode = "LIVE_SINGLE_ENDPOINT";
-      modelProvenance = { planSource: "LIVE_SINGLE_ENDPOINT", synthesisSource: "LIVE_SINGLE_ENDPOINT", provider: new URL(config.baseUrl).hostname, model: config.model, generatedAt: isoNow(), promptSha256: hashValue({ question: options.researchQuestion, evidence }), outputSha256: hashValue(valid), cacheFile: null };
+      modelProvenance = { planSource: "LIVE_SINGLE_ENDPOINT", synthesisSource: "LIVE_SINGLE_ENDPOINT", provider: new URL(config.baseUrl).hostname, model: config.model, generatedAt: isoNow(), promptSha256: synthesisPromptSha256, planPromptSha256: livePlanPromptSha256!, synthesisPromptSha256, outputSha256: hashValue(valid), cacheFile: null, routingNotice: "PLAN 与 SYNTHESIZE 均调用同一在线端点；发送字段已最小化并在 dataDisclosure 留痕。", dataDisclosure: modelDataDisclosure(["PLAN", "SYNTHESIZE"]) };
     } else if (llmMode === "off" && exactGolden) {
       synthesis = seed;
-      synthesisMode = "DETERMINISTIC_MISMATCH_BLOCK";
-      modelProvenance = deterministicProvenance("DETERMINISTIC_MISMATCH_BLOCK", options.researchQuestion);
+      synthesisMode = "DETERMINISTIC_GOLDEN_RULES";
+      modelProvenance = deterministicProvenance("DETERMINISTIC_GOLDEN_RULES", options.researchQuestion);
     } else {
-      synthesis = buildMismatchSynthesis({ ...deterministicInputs, sources, evidence }, seed.data);
+      synthesis = buildMismatchSynthesis({ question: options.researchQuestion, sources, evidence });
+      const retainedDatumIds = new Set(synthesis.data.map((datum) => datum.id));
+      evidence = evidence.map((item, index) => ({
+        ...item,
+        datumIds: [
+          ...item.datumIds.filter((id) => retainedDatumIds.has(id)),
+          ...(index === 0 && retainedDatumIds.has("datum-question-evidence-fit") ? ["datum-question-evidence-fit"] : []),
+        ],
+      }));
       synthesisMode = "DETERMINISTIC_MISMATCH_BLOCK";
-      modelProvenance = deterministicProvenance("DETERMINISTIC_MISMATCH_BLOCK", options.researchQuestion);
+      if (llmMode === "auto") {
+        const config = liveConfig!;
+        const noSynthesisDigest = hashValue({ reason: "LOW_EVIDENCE_FIT", fit, threshold: FIT_THRESHOLD });
+        modelProvenance = {
+          planSource: "LIVE_SINGLE_ENDPOINT",
+          synthesisSource: "DETERMINISTIC_MISMATCH_BLOCK",
+          provider: new URL(config.baseUrl).hostname,
+          model: config.model,
+          generatedAt: isoNow(),
+          promptSha256: noSynthesisDigest,
+          planPromptSha256: livePlanPromptSha256!,
+          synthesisPromptSha256: noSynthesisDigest,
+          outputSha256: hashValue(synthesis),
+          cacheFile: null,
+          routingNotice: `在线 PLAN 已调用；证据匹配度 ${(fit * 100).toFixed(0)}% 低于阈值 ${(FIT_THRESHOLD * 100).toFixed(0)}%，因此未发送 SYNTHESIZE 请求，并以确定性证据缺口拒答。`,
+          dataDisclosure: modelDataDisclosure(["PLAN"]),
+        };
+      } else {
+        modelProvenance = deterministicProvenance("DETERMINISTIC_MISMATCH_BLOCK", options.researchQuestion);
+      }
     }
     applySourceConfidence(sources, synthesis.conclusions);
-    finishStep(activeStep, { synthesis, synthesisMode, evidenceFit: fit, sourceSnapshotId }, `${synthesis.conclusions.length} 条候选；${synthesisMode}；证据匹配度 ${(fit * 100).toFixed(0)}%`);
+    const synthesisOutput = { synthesis: structuredClone(synthesis), synthesisMode, evidenceFit: fit, sourceSnapshotId };
+    finishStep(activeStep, synthesisOutput, `${synthesis.conclusions.length} 条候选；${synthesisMode}；证据匹配度 ${(fit * 100).toFixed(0)}%；${modelProvenance.routingNotice}`);
     await publishProgress(options, steps);
 
     activeStep = startStep(steps, "AUDIT", [steps[2]!.outputId]);
     await publishProgress(options, steps);
     if (options.failAt === "AUDIT") throw new Error("Injected AUDIT failure");
-    const { findings: auditFindings, conflicts } = runDeterministicAudit(synthesis, evidence);
+    const auditResult = runDeterministicAudit(synthesis, evidence);
+    synthesis = auditResult.bundle;
+    const { findings: auditFindings, conflicts } = auditResult;
     const repairAttempts = auditFindings.some((item) => item.status === "REPAIRED") ? 1 : 0;
     finishStep(activeStep, { auditFindings, conflicts, repairAttempts }, `${auditFindings.length} 项规则结果；真实修正 ${repairAttempts} 轮；未解决项交人`);
     await publishProgress(options, steps);
@@ -379,16 +461,14 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       synthesisMode,
       sourceDiscoveryMode: "OFFLINE_SNAPSHOT",
       authorityVerificationMode: "NOT_RUN",
-      // 溯源诚实（#4）：离线标签只在真正的离线综合模式下成立；LIVE_SINGLE_ENDPOINT
-      // 运行不得自称"使用缓存快照"。
-      offlineMode: synthesisMode !== "LIVE_SINGLE_ENDPOINT",
-      offlineModeLabel: synthesisMode === "LIVE_SINGLE_ENDPOINT" ? "在线单一端点模型" : "使用缓存快照",
+      ...modePresentation(synthesisMode),
       repairAttempts,
       sourceVersion,
       plan,
       steps,
       events,
       sourceLimitTrace,
+      synthesisOutput,
       sources,
       sourceVersions,
       evidence,
@@ -417,7 +497,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     finishStep(activeStep, { artifacts: currentArtifacts, artifactVersion: run.artifactVersions.at(-1) }, `${currentArtifacts.length} 个真实文件成果已生成（v1，旧版本不覆盖）`);
     run.updatedAt = isoNow();
     researchRunSchema.parse(run);
-    await persistRun(run, options.workspaceDir);
+    await persistRun(run, options.workspaceDir, options.publishCurrent ?? true);
     await publishProgress(options, steps);
     return run;
   } catch (error) {
@@ -425,7 +505,11 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       activeStep.status = "failed";
       activeStep.error = errorText(error);
       activeStep.completedAt = isoNow();
-      await options.onProgress?.(structuredClone(steps));
+      try {
+        await options.onProgress?.(structuredClone(steps));
+      } catch {
+        // A secondary progress-transport failure must not replace the workflow's root failure.
+      }
     }
     throw error;
   }

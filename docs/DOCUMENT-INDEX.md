@@ -66,6 +66,7 @@
 - `IMPLEMENTATION_REPORT.md`
 - `TEST-RESULTS.md`
 - `VERIFICATION-EVIDENCE.md`
+- `ISSUE-RESOLUTION-AUDIT-0828.md`
 - `DUAL-AGENT-REVIEW.md`
 
 在恢复开发前，需要把其中所有“PASS/完成/已实现”与冻结需求重新核对。没有新鲜入口证据的历史结论不得继承为完成状态。
@@ -116,4 +117,4 @@
 
 ## 7. 当前权限状态
 
-当前授权读取仓库、修改本地后端/测试/文档、打包源码和运行本地验证。没有 commit、push、PR、Tag、部署、数据库迁移、线上配置或真实用户数据操作权限。
+当前授权读取仓库、修改后端/测试/文档和运行本地验证；本轮后端收口已另获授权提交并推送 `main`。仍未授权 PR、Tag、部署、数据库迁移、线上配置或真实用户数据操作。

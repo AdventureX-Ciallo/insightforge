@@ -1,33 +1,21 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import {
   evidencePackageSchema,
   MAX_ARTIFACT_VERSIONS,
+  computeResearchSnapshotId,
+  researchRunSchema,
   type ArtifactRecord,
   type ArtifactVersion,
   type ResearchRun,
 } from "./domain.js";
+import { atomicWriteJson } from "./atomic-file.js";
 import { hashFile, hashValue } from "./hash.js";
 import { writePptx } from "./tools/pptx-export.js";
 import { writeMarkdownReport, writePdfReport } from "./tools/report-export.js";
 function assertInside(root: string, target: string) {
   const rel = relative(resolve(root), resolve(target));
   if (!rel || rel === ".." || rel.startsWith("../")) throw new Error("Artifact path is outside the allowed workspace");
-}
-export function computeResearchSnapshotId(run: ResearchRun): string {
-  return hashValue({
-    researchQuestion: run.researchQuestion,
-    sourceVersions: run.sourceVersions,
-    evidence: run.evidence,
-    data: run.data,
-    assumptions: run.assumptions,
-    claims: run.claims,
-    evidenceGaps: run.evidenceGaps,
-    conclusions: run.conclusions,
-    candidateRevisions: run.candidateRevisions,
-    auditFindings: run.auditFindings,
-    humanDecisions: run.humanDecisions,
-  });
 }
 function packageFor(run: ResearchRun) {
   return evidencePackageSchema.parse({
@@ -36,6 +24,8 @@ function packageFor(run: ResearchRun) {
     synthesisMode: run.synthesisMode,
     sourceDiscoveryMode: run.sourceDiscoveryMode,
     authorityVerificationMode: run.authorityVerificationMode,
+    offlineMode: run.offlineMode,
+    offlineModeLabel: run.offlineModeLabel,
     sourceLimitTrace: run.sourceLimitTrace,
     sources: run.sources,
     sourceVersions: run.sourceVersions,
@@ -121,10 +111,68 @@ export async function writeArtifactVersion(
   run.artifacts = current;
   return current;
 }
-export async function persistRun(run: ResearchRun, workspaceDir: string) {
+export async function persistRun(run: ResearchRun, workspaceDir: string, updateCurrent = true) {
   const runDir = join(resolve(workspaceDir), run.id);
   assertInside(workspaceDir, runDir);
   await mkdir(runDir, { recursive: true });
-  await writeFile(join(runDir, "run.json"), `${JSON.stringify(run, null, 2)}\n`, "utf8");
-  await writeFile(join(resolve(workspaceDir), "current.json"), `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  await atomicWriteJson(join(runDir, "run.json"), run);
+  if (updateCurrent) await atomicWriteJson(join(resolve(workspaceDir), "current.json"), run);
+}
+
+export class PersistedRunRecoveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PersistedRunRecoveryError";
+  }
+}
+
+interface RunCandidate {
+  path: string;
+  modifiedAt: number;
+  run: ResearchRun;
+}
+
+async function loadRunCandidate(path: string): Promise<RunCandidate | null> {
+  try {
+    const [raw, info] = await Promise.all([readFile(path, "utf8"), stat(path)]);
+    return { path, modifiedAt: info.mtimeMs, run: researchRunSchema.parse(JSON.parse(raw) as unknown) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new PersistedRunRecoveryError(`Persisted run state is invalid: ${path}`);
+  }
+}
+
+/** Restore the newest schema-valid run snapshot and repair a missing/corrupt current.json. */
+export async function loadPersistedRun(workspaceDir: string): Promise<ResearchRun | null> {
+  const root = resolve(workspaceDir);
+  const currentPath = join(root, "current.json");
+  const candidates: RunCandidate[] = [];
+  let currentInvalid = false;
+  try {
+    const current = await loadRunCandidate(currentPath);
+    if (current) candidates.push(current);
+  } catch {
+    currentInvalid = true;
+  }
+
+  let invalidRunSnapshot = false;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const candidate = await loadRunCandidate(join(root, entry.name, "run.json"));
+      if (candidate) candidates.push(candidate);
+    } catch {
+      invalidRunSnapshot = true;
+    }
+  }
+
+  if (candidates.length === 0) {
+    if (currentInvalid || invalidRunSnapshot) {
+      throw new PersistedRunRecoveryError("Persisted run state is corrupt and no valid run snapshot can be recovered");
+    }
+    return null;
+  }
+  const selected = candidates.sort((left, right) => right.modifiedAt - left.modifiedAt)[0]!;
+  if (selected.path !== currentPath) await atomicWriteJson(currentPath, selected.run);
+  return selected.run;
 }

@@ -107,7 +107,7 @@ PRD、用户流程、前端和验收共同引用 `docs/RESEARCH-OBJECT-MODEL.md`
 - 产生 3–5 条候选结论。
 - 默认离线黄金路径加载、消费并重新校验真实模型候选快照；在线增强路径调用一个显式模型端点生成候选。
 - 每条候选引用一个或多个 Claim；Claim 再引用 Evidence/Datum/Assumption，或记录 EvidenceGap。不得让 Conclusion 用 `evidenceIds` 绕过 Claim/Datum。
-- 未知 evidenceId、少于三条有效候选、模型/快照问题不匹配均阻断 SYNTHESIZE。
+- 在线响应中，单条候选含未知 evidenceId 时整条候选丢弃，不得删除坏 ID 后保留同一句；其他独立候选继续校验，最终少于三条有效候选时才阻断整个 SYNTHESIZE。认证缓存是静态制品，任一未知 evidence/assumption ID 都使整份缓存无效；模型/快照问题不匹配直接阻断。
 - 不得把开发者固定字符串标记为模型输出。
 
 ### FR-05 AUDIT
@@ -169,7 +169,7 @@ PRD、用户流程、前端和验收共同引用 `docs/RESEARCH-OBJECT-MODEL.md`
 
 ### NFR-01 可运行性
 
-- Node.js 20+；`npm ci` 后无需改源码即可测试、构建、启动。
+- Node.js `^20.19.0 || ^22.12.0 || >=23`；`npm ci` 后无需改源码即可测试、构建、启动。
 - 黄金任务断网可运行；单次不超过三分钟，目标 90 秒内。
 
 ### NFR-02 持久性

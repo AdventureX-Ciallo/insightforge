@@ -1,21 +1,24 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 
 import { runApiFuzz } from "./api.fuzz.js";
 import { runAuditFuzz } from "./audit.fuzz.js";
 import { runEngineFuzz } from "./engine.fuzz.js";
 import { runSuite, type FuzzSuiteResult, invariant } from "./harness.js";
+import { runHumanDecisionFuzz } from "./human-decision.fuzz.js";
 import { runSsrfFuzz } from "./ssrf.fuzz.js";
 import { runStructureFuzz } from "./structure.fuzz.js";
 import { runUploadFuzz } from "./upload.fuzz.js";
 
 const CASES = {
   engine: 30,
-  structure: 172_000,
+  humanDecision: 1_000,
+  structure: 246_000,
   api: 5_000,
-  audit: 100_000,
+  audit: 104_000,
   upload: 165_000,
-  ssrf: 100_000,
+  ssrf: 125_000,
 } as const;
 
 async function sourceLines(directory: string): Promise<number> {
@@ -49,21 +52,30 @@ async function main() {
   const startedAt = new Date().toISOString();
   const started = performance.now();
   const results: FuzzSuiteResult[] = [];
+  const lines = await sourceLines(resolve("src"));
+  const nonStructureCases = CASES.engine + CASES.humanDecision + CASES.api + CASES.audit + CASES.upload + CASES.ssrf;
+  const structureCases = Math.max(CASES.structure, lines * 100 - nonStructureCases + 1_000);
 
   const engine = await runSuite(options.seed, "engine-random-walk", (rng) => runEngineFuzz(rng, CASES.engine), ["injected failures propagate", "terminal status remains one of three", "step consumption chain remains intact"]);
   results.push(engine.result);
-  const structure = await runSuite(options.seed, "research-run-structure", (rng) => runStructureFuzz(rng, CASES.structure, engine.value), ["legal ResearchRun values parse", "recursive malformed and type-polluted values fail closed", "at least 6,000 single-edge mutations of complete valid graphs fail closed"]);
+  const structure = await runSuite(options.seed, "research-run-structure", (rng) => runStructureFuzz(rng, structureCases, engine.value), ["legal ResearchRun values parse", "recursive malformed and type-polluted values fail closed", "at least 6,000 single-edge mutations of complete valid graphs fail closed"]);
   results.push(structure.result);
+  const humanDecision = await runSuite(options.seed, "human-decision-idempotency", (rng) => runHumanDecisionFuzz(rng, CASES.humanDecision, engine.value), ["final decisions reject same-action replay", "final decisions reject cross-terminal flips", "EDIT explicitly reopens review"]);
+  results.push(humanDecision.result);
   const api = await runSuite(options.seed, "http-api", (rng) => runApiFuzz(rng, CASES.api), ["random methods, paths, encodings, NUL and bodies never return 5xx", "server remains healthy"]);
   results.push(api.result);
   const audit = await runSuite(options.seed, "audit-mutation", (rng) => runAuditFuzz(rng, CASES.audit), ["unsupported AI judgment downgrades", "same-period different values conflict", "input mutation changes audit output"]);
   results.push(audit.result);
-  const upload = await runSuite(options.seed, "upload-whitelist", (rng) => runUploadFuzz(rng, CASES.upload, resolve(".insightforge", "fuzz")), ["non-whitelist and traversal inputs reject", "random byte failures stay typed", "successful persistence is mode 0600"]);
-  results.push(upload.result);
-  const ssrf = await runSuite(options.seed, "ssrf-prefetch", (rng) => runSsrfFuzz(rng, CASES.ssrf), ["reserved, loopback and malformed targets reject", "fetch count remains zero"]);
+  const uploadWorkspace = await mkdtemp(join(tmpdir(), "insightforge-fuzz-upload-"));
+  try {
+    const upload = await runSuite(options.seed, "upload-whitelist", (rng) => runUploadFuzz(rng, CASES.upload, uploadWorkspace), ["non-whitelist and traversal inputs reject", "random byte failures stay typed", "successful persistence is mode 0600"]);
+    results.push(upload.result);
+  } finally {
+    await rm(uploadWorkspace, { recursive: true, force: true });
+  }
+  const ssrf = await runSuite(options.seed, "ssrf-prefetch", (rng) => runSsrfFuzz(rng, CASES.ssrf), ["reserved, loopback and malformed targets reject", "dangerous DNS fallback answers stop later resolvers", "fetch count remains zero"]);
   results.push(ssrf.result);
 
-  const lines = await sourceLines(resolve("src"));
   const targetCases = Math.max(500_000, lines * 100);
   const totalCases = results.reduce((sum, result) => sum + result.cases, 0);
   invariant(totalCases >= targetCases, `executed ${totalCases} cases, below ${targetCases} target for ${lines} source lines`);

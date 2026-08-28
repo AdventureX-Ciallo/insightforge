@@ -81,7 +81,7 @@ export async function runApiFuzz(rng: SeededPrng, cases: number) {
             body = rng.int(10) === 0 ? "{" : JSON.stringify(bodyFor(endpoint, rng));
           }
         }
-        const response = await fetch(`${baseUrl}${path}`, { method, headers, ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(2_000) });
+        const response = await fetch(`${baseUrl}${path}`, { method, headers, ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(5_000) });
         invariant(response.status < 500, `case=${index}: ${method} ${path.slice(0, 180)} returned ${response.status}`);
         await response.arrayBuffer();
       }

@@ -1,28 +1,30 @@
 # 验证证据索引
 
-> 状态：`CURRENT — 2026-08-28`。所有结论按“真实成功、真实失败、环境未具备”分开记录。
+> 状态：`CURRENT — 2026-08-29`。所有结论按“真实成功、真实失败、环境未具备”分开记录。
 
 ## 基线与变更边界
 
-- 基线 commit：`2113f1091c4e5dbacc5b828013f0ff62514fbd9e`。
-- 当前是本地隔离 worktree，保留已有脏改动。
-- 未 commit、push、创建 PR、打 Tag、部署、迁移数据库、修改线上配置或操作真实用户数据。
+- 本文件所在提交基于远端 `f11f97e19c5808d2111659aaec28a294f3ff828c` 完成 rebase 与全量复验。
+- 当前是本地隔离 worktree；本轮获授权直接提交并推送 `main`。
+- 未创建 PR、打 Tag、部署、迁移数据库、修改线上配置或操作真实用户数据。
 - 本轮不修改 ABloom 负责的 `public/`。
 
 ## 自动门禁
 
-2026-08-28 在当前工作树与一个无 `.git`、无依赖、无构建和无运行状态的全新解包目录分别执行：
+2026-08-28 在当前工作树执行的最新门禁：
 
 ```text
-npm ci                         PASS
-npm run verify                 PASS; 36/36; build; secret scan
-npm run test:e2e               PASS; 1/1 Chromium
-npm run demo:triple            PASS; 3/3
+npm run verify                 PASS; 158/158; four coverage metrics 100%; build; 172-file secret scan; contract 23/23; fuzz 685,000
+npm run test:e2e               PASS; 1/1 Chromium; 4.7 s; downloaded five-page PPTX parsed
+npm run demo:triple            PASS; 3/3; 88/20/16 ms
 npm run smoke                  PASS
-npm audit --audit-level=high   PASS; 0 vulnerabilities
+npm ls --all                   PASS
+npm audit --audit-level=low    PASS; 0 vulnerabilities
 ```
 
-详细结果见 `docs/TEST-RESULTS.md`。最终源码包的 SHA-256 和基线保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。
+加入本审计文档后已重跑完整 `npm run verify`；当前 172 个 tracked/untracked 且未忽略的文件在 aggregate gate 内通过密钥扫描。
+
+收口前旧源码包曾在无 `.git`、无依赖、无构建和无运行状态的全新解包目录通过当时的 36/36 门禁；该记录只证明旧包，不证明当前工作树。当前实现按所有者要求尚未重新打包，最终源码包必须在前端冻结后生成并在两个全新解包目录重跑；SHA-256 和基线应保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。详细结果见 `docs/TEST-RESULTS.md`。
 
 ## 模型提出、程序校验
 
