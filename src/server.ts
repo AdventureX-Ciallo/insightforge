@@ -376,7 +376,8 @@ export function createInsightForgeServer(options: ServerOptions) {
   // loopback 数据。Host 头必须是回环主机名（允许带端口与 IPv6 方括号形式），其余一律 403。
   function isLoopbackHostHeader(host: string | undefined): boolean {
     if (!host) return false;
-    const bare = host.startsWith("[") ? (host.slice(1, host.indexOf("]") !== -1 ? host.indexOf("]") : host.length)) : host.split(":")[0]!;
+    // 主机名大小写不敏感（RFC 3986）：合法客户端可能发 "Localhost:4399"，不能误拒。
+    const bare = (host.startsWith("[") ? (host.slice(1, host.indexOf("]") !== -1 ? host.indexOf("]") : host.length)) : host.split(":")[0]!).toLowerCase();
     return LOOPBACK_HOSTS.has(bare);
   }
 

@@ -50,6 +50,17 @@ test("requests with a non-loopback Host header are rejected (DNS rebinding, #3)"
       req.end();
     });
     assert.equal(ipv6Status, 200);
+
+    // 主机名大小写不敏感：合法客户端发大写 Localhost 不得误拒。
+    const upperStatus = await new Promise<number>((resolveStatus, rejectRequest) => {
+      const req = request(
+        { host: "127.0.0.1", port, path: "/api/health", headers: { host: `LOCALHOST:${port}` }, method: "GET" },
+        (res) => { res.resume(); resolveStatus(res.statusCode ?? 0); },
+      );
+      req.on("error", rejectRequest);
+      req.end();
+    });
+    assert.equal(upperStatus, 200);
   });
 });
 
