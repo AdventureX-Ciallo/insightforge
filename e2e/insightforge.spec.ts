@@ -47,7 +47,10 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
   const charging = page.locator(".conclusion-card").nth(1);
   await charging.getByRole("button", { name: "编辑" }).click();
   await page.locator("#edit-text").fill("人工修订：名义供给增长不能替代区域利用率验证。");
+  const decisionResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/decisions"));
   await page.getByRole("button", { name: "保存并确认" }).click();
+  expect((await decisionResponse).ok()).toBe(true);
+  await expect(charging).toContainText("人工修订：名义供给增长不能替代区域利用率验证。");
   await expect(charging).toContainText("PENDING_REVIEW");
 
   await page.getByRole("button", { name: /审查修正/ }).click();
@@ -57,10 +60,11 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
   await expect(page.getByText("AFTER").first()).toBeVisible();
 
   await page.getByRole("button", { name: /来源更新/ }).click();
+  const updateResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/source-update"));
   await page.getByRole("button", { name: /发现新版来源/ }).click();
-  // 人工决定之后来源更新要沿版本链重导出全部成果（含 PDF 浏览器渲染），耗时可能超过默认 5 秒。
+  expect((await updateResponse).ok()).toBe(true);
+  // 人工决定之后来源更新要沿版本链重导出全部成果；PDF 使用确定性的纯 Node 路径。
   await expect(page.getByText("来源已更新到 v2")).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => page.locator(".impact").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(7);
   await expect.poll(() => page.locator(".impact").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(7);
 
   await page.getByRole("button", { name: /成果交付/ }).click();

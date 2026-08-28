@@ -134,7 +134,7 @@ test("Path 1–6 adversarial acceptance matrix", async (context) => {
     await app.stop();
   }
 
-  await context.test("Path 6: DNS rebinding candidates are rejected before fetch", async () => {
+  await context.test("Path 6: mixed public/private DNS answers are rejected during preflight", async () => {
     let fetchCalls = 0;
     await assert.rejects(searchSelectedEngine(
       "bing",

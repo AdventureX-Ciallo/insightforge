@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { researchRunSchema, workflowStates, type ArtifactVersion, type ResearchRun, type RunStep, type ToolCallEvent } from "./domain.js";
 import { buildBoundaryQuestions } from "./boundary-questions.js";
-import { runGoldenCase, type CollectedUploadInput } from "./engine.js";
+import { MAX_RUN_SOURCES, MAX_RUN_UPLOADS, runGoldenCase, type CollectedUploadInput } from "./engine.js";
 import { applyHumanDecisionAndPersist, type HumanDecisionInput } from "./human-decision.js";
 import { applySourceUpdate } from "./source-update.js";
 import { loadApiLlmSettings, publicLlmSettings, saveApiLlmSettings, SettingsStoreError } from "./settings-store.js";
@@ -239,6 +239,7 @@ export function settleServerClose(
 export function createInsightForgeServer(options: ServerOptions) {
   const jobs = new Map<string, Job>();
   const eventSubscribers = new Map<string, Set<RunEventSubscriber>>();
+  const runMutationQueues = new Map<string, Promise<void>>();
   const searchFetcher = options.searchFetcher ?? fetch;
   const stepDelayMs = options.stepDelayMs ?? 120;
   const sseHeartbeatMs = options.sseHeartbeatMs ?? 15_000;
@@ -248,6 +249,13 @@ export function createInsightForgeServer(options: ServerOptions) {
   async function persistJob(job: Job) {
     await mkdir(options.workspaceDir, { recursive: true });
     await writeFile(join(options.workspaceDir, `${job.runId}-progress.json`), `${JSON.stringify(job, null, 2)}\n`, "utf8");
+  }
+
+  function serializeRunMutation<T>(runId: string, action: () => Promise<T>) {
+    const previous = runMutationQueues.get(runId) ?? Promise.resolve();
+    const result = previous.then(action);
+    runMutationQueues.set(runId, result.then(() => undefined, () => undefined));
+    return result;
   }
 
   function publishRunEvent(runId: string, event: "step" | "tool", value: unknown) {
@@ -420,8 +428,13 @@ export function createInsightForgeServer(options: ServerOptions) {
           return;
         }
         const uploadIds = body.uploadIds === undefined ? [] : body.uploadIds;
-        if (!Array.isArray(uploadIds) || uploadIds.length > 8 || uploadIds.some((id) => typeof id !== "string")) {
-          sendJson(response, 400, { error: "uploadIds must be an array containing at most 8 upload identifiers" });
+        if (!Array.isArray(uploadIds) || uploadIds.length > MAX_RUN_UPLOADS || uploadIds.some((id) => typeof id !== "string")) {
+          sendJson(response, 400, {
+            error: `uploadIds must be an array containing at most ${MAX_RUN_UPLOADS} upload identifiers`,
+            code: "SOURCE_LIMIT_EXCEEDED",
+            maxSources: MAX_RUN_SOURCES,
+            maxUploads: MAX_RUN_UPLOADS,
+          });
           return;
         }
         const uploadedFiles: CollectedUploadInput[] = [];
@@ -478,10 +491,13 @@ export function createInsightForgeServer(options: ServerOptions) {
         const input = action === "EDIT"
           ? { conclusionId, action, text: typeof body.text === "string" ? body.text : "", ...decisionContext }
           : { conclusionId, action, ...decisionContext };
-        job.run = await applyHumanDecisionAndPersist(job.run, input as HumanDecisionInput, options.workspaceDir);
-        currentRun = job.run;
-        await persistJob(job);
-        sendJson(response, 200, { run: publicRun(job.run) });
+        const updatedRun = await serializeRunMutation(job.runId, async () => {
+          job.run = await applyHumanDecisionAndPersist(job.run!, input as HumanDecisionInput, options.workspaceDir);
+          currentRun = job.run;
+          await persistJob(job);
+          return job.run;
+        });
+        sendJson(response, 200, { run: publicRun(updatedRun) });
         return;
       }
       const updateMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/source-update$/);
@@ -491,11 +507,14 @@ export function createInsightForgeServer(options: ServerOptions) {
           sendJson(response, 404, { error: "Completed run not found" });
           return;
         }
-        job.run = await applySourceUpdate(job.run, { fixtureDir: options.fixtureDir, workspaceDir: options.workspaceDir });
-        currentRun = job.run;
-        await writeFile(join(options.workspaceDir, "current.json"), `${JSON.stringify(job.run, null, 2)}\n`, "utf8");
-        await persistJob(job);
-        sendJson(response, 200, { run: publicRun(job.run) });
+        const updatedRun = await serializeRunMutation(job.runId, async () => {
+          job.run = await applySourceUpdate(job.run!, { fixtureDir: options.fixtureDir, workspaceDir: options.workspaceDir });
+          currentRun = job.run;
+          await writeFile(join(options.workspaceDir, "current.json"), `${JSON.stringify(job.run, null, 2)}\n`, "utf8");
+          await persistJob(job);
+          return job.run;
+        });
+        sendJson(response, 200, { run: publicRun(updatedRun) });
         return;
       }
       const boundaryMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/boundary-questions$/);

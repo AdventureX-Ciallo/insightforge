@@ -62,6 +62,9 @@ export interface RunGoldenCaseOptions {
   onToolEvent?: (event: ToolCallEvent) => void | Promise<void>;
 }
 
+export const MAX_RUN_SOURCES = 10;
+export const MAX_RUN_UPLOADS = 5;
+
 const isoNow = () => new Date().toISOString();
 
 function makeSteps(): RunStep[] {
@@ -226,6 +229,9 @@ function deterministicProvenance(mode: "DETERMINISTIC_MISMATCH_BLOCK", question:
 }
 
 export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<ResearchRun> {
+  if ((options.uploadedFiles?.length ?? 0) > MAX_RUN_UPLOADS) {
+    throw new Error(`SOURCE_LIMIT_EXCEEDED: a run accepts at most ${MAX_RUN_SOURCES} sources, including at most ${MAX_RUN_UPLOADS} uploaded files`);
+  }
   const runId = options.runId ?? `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
   await mkdir(join(options.workspaceDir, runId), { recursive: true });
   const steps = makeSteps();

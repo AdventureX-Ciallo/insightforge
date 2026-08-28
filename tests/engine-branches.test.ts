@@ -50,6 +50,23 @@ test("v2 source selection executes the final-input branch through DELIVER", asyn
   assert.match(run.sources.find((item) => item.id === "source-market-csv")!.locator.url!, /gov\.cn/u);
 });
 
+test("engine rejects a run that would exceed the ten-source product boundary before reading uploads", async () => {
+  const uploadedFiles = Array.from({ length: 6 }, (_value, index) => ({
+    id: `upload-${index}`,
+    kind: "TXT" as const,
+    originalFileName: `source-${index}.txt`,
+    path: `/path-that-must-not-be-read/source-${index}.txt`,
+    sha256: "0".repeat(64),
+    uploadedAt: "2026-08-28T00:00:00.000Z",
+  }));
+  await assert.rejects(runGoldenCase({
+    researchQuestion: question,
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir: await workspace("insightforge-source-limit-"),
+    uploadedFiles,
+  }), /SOURCE_LIMIT_EXCEEDED.*at most 10 sources.*at most 5 uploaded files/u);
+});
+
 test("live PLAN and SYNTHESIZE reject invalid model programs without deterministic fallback", async () => {
   const originalFetch = globalThis.fetch;
   try {

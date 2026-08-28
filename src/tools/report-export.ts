@@ -1,8 +1,4 @@
-import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-
-import { chromium, type Browser } from "playwright";
 
 import type { ResearchRun, SourceLocator } from "../domain.js";
 
@@ -16,11 +12,6 @@ export interface ReportModel {
   question: string;
   sections: ReportSection[];
 }
-
-let browserPromise: Promise<Browser> | undefined;
-let activePages = 0;
-let closeTimer: ReturnType<typeof setTimeout> | undefined;
-let playwrightUnavailable = false;
 
 function markdownText(value: string) {
   return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/gu, "\\$1").replace(/\r?\n/gu, " ");
@@ -87,95 +78,106 @@ export async function writeMarkdownReport(run: ResearchRun, path: string) {
   await writeFile(path, markdownReport(run), "utf8");
 }
 
-type BrowserLauncher = () => Promise<Browser>;
-
-const DEFAULT_BROWSER_LAUNCHER: BrowserLauncher = () => chromium.launch();
-
-async function sharedBrowser(launcher: BrowserLauncher) {
-  if (closeTimer) clearTimeout(closeTimer);
-  closeTimer = undefined;
-  browserPromise ??= launcher().catch((error: unknown) => {
-    browserPromise = undefined;
-    throw error;
-  });
-  return browserPromise;
-}
-
-function scheduleBrowserClose() {
-  if (activePages !== 0 || !browserPromise) return;
-  closeTimer = setTimeout(() => {
-    const closing = browserPromise;
-    browserPromise = undefined;
-    closeTimer = undefined;
-    void closing?.then((browser) => browser.close());
-  }, 100);
-}
-
-async function writePdfWithFallbackRenderer(model: ReportModel, path: string) {
-  const scriptPath = fileURLToPath(new URL("../../scripts/render-report-pdf.py", import.meta.url));
-  await new Promise<void>((resolveRender, rejectRender) => {
-    const child = spawn("python3", [scriptPath, path], { stdio: ["pipe", "ignore", "pipe"] });
-    const errors: Buffer[] = [];
-    child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
-    child.once("error", rejectRender);
-    child.once("exit", (code) => {
-      if (code === 0) resolveRender();
-      else rejectRender(new Error(`PDF fallback renderer failed: ${Buffer.concat(errors).toString("utf8").trim()}`));
-    });
-    child.stdin.end(JSON.stringify(model));
-  });
-}
-
-export async function writePdfReport(run: ResearchRun, path: string, launcher: BrowserLauncher = DEFAULT_BROWSER_LAUNCHER) {
-  if ((process.env.NODE_ENV === "test" && launcher === DEFAULT_BROWSER_LAUNCHER) || playwrightUnavailable) {
-    await writePdfWithFallbackRenderer(reportModel(run), path);
-    return;
+function pdfHexText(value: string) {
+  const littleEndian = Buffer.from(value, "utf16le");
+  for (let index = 0; index < littleEndian.length; index += 2) {
+    const first = littleEndian[index]!;
+    littleEndian[index] = littleEndian[index + 1]!;
+    littleEndian[index + 1] = first;
   }
-  activePages += 1;
-  let page: Awaited<ReturnType<Browser["newPage"]>> | undefined;
-  try {
-    const browser = await sharedBrowser(launcher);
-    page = await browser.newPage();
-    await page.setContent(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
-      @page { size: A4; margin: 16mm; }
-      body { color: #122033; font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 11pt; line-height: 1.55; }
-      h1 { font-size: 24pt; margin: 0 0 8mm; } h2 { color: #087f72; font-size: 16pt; margin: 8mm 0 3mm; break-after: avoid; }
-      .question { background: #eef7f5; border-left: 4px solid #22c3a6; padding: 4mm; }
-      li { margin: 0 0 2.5mm; overflow-wrap: anywhere; } ul { padding-left: 6mm; }
-    </style></head><body><main id="report"></main></body></html>`);
-    await page.evaluate((model) => {
-      document.title = model.title;
-      const root = document.querySelector("#report");
-      if (!root) throw new Error("Report root is missing");
-      const title = document.createElement("h1");
-      title.textContent = model.title;
-      root.append(title);
-      const question = document.createElement("p");
-      question.className = "question";
-      question.textContent = `研究问题：${model.question}`;
-      root.append(question);
-      for (const section of model.sections) {
-        const heading = document.createElement("h2");
-        heading.textContent = section.heading;
-        root.append(heading);
-        const list = document.createElement("ul");
-        for (const value of section.items) {
-          const item = document.createElement("li");
-          item.textContent = value;
-          list.append(item);
-        }
-        root.append(list);
+  return littleEndian.toString("hex").toUpperCase();
+}
+
+function reportLines(model: ReportModel) {
+  const lines = [model.title, `研究问题：${model.question}`];
+  for (const section of model.sections) {
+    lines.push(section.heading);
+    for (const item of section.items) {
+      const characters = [...item.replace(/\s+/gu, " ").trim()];
+      for (let offset = 0; offset < characters.length; offset += 42) {
+        lines.push(`${offset === 0 ? "- " : "  "}${characters.slice(offset, offset + 42).join("")}`);
       }
-    }, reportModel(run));
-    await page.pdf({ path, format: "A4", printBackground: true, preferCSSPageSize: true });
-  } catch {
-    // 某些受限 macOS 沙箱禁止 Chromium 注册 Mach bootstrap 端口；仍产出可解析的真实 PDF，
-    // 正常运行环境始终优先使用上面的 Playwright page.pdf() 路径。
-    if (!page) playwrightUnavailable = true;
-    await writePdfWithFallbackRenderer(reportModel(run), path);
-  } finally {
-    await page?.close();
-    activePages -= 1;
-    scheduleBrowserClose();
+    }
   }
+  return lines;
+}
+
+function pdfBuffer(model: ReportModel) {
+  const pages: string[][] = [];
+  const lines = reportLines(model);
+  for (let offset = 0; offset < lines.length; offset += 44) pages.push(lines.slice(offset, offset + 44));
+  const pageObjectIds = pages.map((_page, index) => 6 + index * 2);
+  const codeUnits = [...new Set(lines.flatMap((line) => Array.from({ length: line.length }, (_value, index) => line.charCodeAt(index))))].sort((left, right) => left - right);
+  const mappings: string[] = [];
+  for (let offset = 0; offset < codeUnits.length; offset += 100) {
+    const group = codeUnits.slice(offset, offset + 100);
+    mappings.push(`${group.length} beginbfchar`);
+    for (const codeUnit of group) {
+      const code = codeUnit.toString(16).toUpperCase().padStart(4, "0");
+      mappings.push(`<${code}> <${code}>`);
+    }
+    mappings.push("endbfchar");
+  }
+  const toUnicode = `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+${mappings.join("\n")}
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`;
+  const objects: string[] = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>`,
+    "<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [4 0 R] /ToUnicode 5 0 R >>",
+    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> >>",
+    `<< /Length ${Buffer.byteLength(toUnicode)} >>\nstream\n${toUnicode}\nendstream`,
+  ];
+  pages.forEach((pageLines, index) => {
+    const pageObjectId = pageObjectIds[index]!;
+    const contentObjectId = pageObjectId + 1;
+    const commands = ["BT", "/F1 10 Tf", "48 800 Td", "14 TL"];
+    pageLines.forEach((line, lineIndex) => {
+      if (lineIndex > 0) commands.push("T*");
+      const text = pdfHexText(line);
+      commands.push(`/Span << /ActualText <FEFF${text}> >> BDC`, `<${text}> Tj`, "EMC");
+    });
+    commands.push("ET");
+    const stream = `${commands.join("\n")}\n`;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectId} 0 R >>`,
+      `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`,
+    );
+  });
+
+  const chunks = [Buffer.from("%PDF-1.4\n%InsightForge\n", "ascii")];
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+    chunks.push(Buffer.from(`${index + 1} 0 obj\n${object}\nendobj\n`, "ascii"));
+  });
+  const xrefOffset = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const xref = [
+    `xref\n0 ${objects.length + 1}`,
+    "0000000000 65535 f ",
+    ...offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n `),
+    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`,
+  ].join("\n");
+  chunks.push(Buffer.from(xref, "ascii"));
+  return Buffer.concat(chunks);
+}
+
+async function writePureNodePdf(model: ReportModel, path: string) {
+  await writeFile(path, pdfBuffer(model));
+}
+
+export async function writePdfReport(run: ResearchRun, path: string) {
+  // 交付路径保持确定性：Type0/CID + ActualText，不启动浏览器，也不依赖 Python、ReportLab 或系统包。
+  await writePureNodePdf(reportModel(run), path);
 }

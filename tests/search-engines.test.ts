@@ -48,7 +48,7 @@ test("search validates protocol, host, and every DNS address before fetch", asyn
     }, async () => [{ address: "93.184.216.34", family: 4 }, { address: "127.0.0.1", family: 4 }]),
     /private|reserved|loopback/i,
   );
-  assert.equal(fetchCalls, 0, "DNS rebinding candidate is rejected before fetch");
+  assert.equal(fetchCalls, 0, "a mixed public/private DNS answer is rejected before fetch");
 });
 
 test("POST /api/sources/search rejects invalid engines and exposes candidates, not evidence", async () => {

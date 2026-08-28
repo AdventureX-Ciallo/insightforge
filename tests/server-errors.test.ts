@@ -135,12 +135,23 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
       { researchQuestion: "短" },
       { researchQuestion: "问".repeat(241) },
       { researchQuestion: "足够长度的研究问题用于输入校验？", uploadIds: "bad" },
-      { researchQuestion: "足够长度的研究问题用于输入校验？", uploadIds: Array(9).fill("x") },
       { researchQuestion: "足够长度的研究问题用于输入校验？", uploadIds: [1] },
     ]) {
       const response = await fetch(`${baseUrl}/api/runs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       assert.equal(response.status, 400);
     }
+    const overSourceLimit = await fetch(`${baseUrl}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ researchQuestion: "足够长度的研究问题用于信源上限校验？", uploadIds: Array(6).fill("x") }),
+    });
+    assert.equal(overSourceLimit.status, 400);
+    assert.deepEqual(await overSourceLimit.json(), {
+      error: "uploadIds must be an array containing at most 5 upload identifiers",
+      code: "SOURCE_LIMIT_EXCEEDED",
+      maxSources: 10,
+      maxUploads: 5,
+    });
     assert.equal((await fetch(`${baseUrl}/api/runs/missing`)).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/missing/decisions`, { method: "POST" })).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/missing/source-update`, { method: "POST" })).status, 404);

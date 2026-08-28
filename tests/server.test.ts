@@ -53,19 +53,25 @@ test("HTTP entrypoint runs, persists, reviews, updates, and downloads real artif
     assert.equal(current.status, 200);
     assert.equal(((await current.json()) as { run: { id: string } }).run.id, runId);
 
-    const decision = await fetch(`${baseUrl}/api/runs/${runId}/decisions`, {
+    const decisionPromise = fetch(`${baseUrl}/api/runs/${runId}/decisions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ conclusionId: "conclusion-charging-growth", action: "EDIT", text: "人工修订后的候选判断。" }),
     });
+    const updatePromise = fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" });
+    const [decision, update] = await Promise.all([decisionPromise, updatePromise]);
     assert.equal(decision.status, 200);
     const edited = ((await decision.json()) as { run: { conclusions: Array<{ id: string; type: string; reviewStatus: string }> } }).run.conclusions.find((item) => item.id === "conclusion-charging-growth");
     assert.equal(edited?.type, "AI_JUDGMENT");
     assert.equal(edited?.reviewStatus, "PENDING_REVIEW");
 
-    const update = await fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" });
     assert.equal(update.status, 200);
     assert.equal(((await update.json()) as { run: { sourceVersion: string } }).run.sourceVersion, "v2");
+    const afterConcurrentWrites = ((await (await fetch(`${baseUrl}/api/runs/${runId}`)).json()) as {
+      run: { sourceVersion: string; conclusions: Array<{ id: string; text: string }> };
+    }).run;
+    assert.equal(afterConcurrentWrites.sourceVersion, "v2");
+    assert.equal(afterConcurrentWrites.conclusions.find((item) => item.id === "conclusion-charging-growth")?.text, "人工修订后的候选判断。");
 
     const artifact = await fetch(`${baseUrl}/api/runs/${runId}/artifacts/PPTX`);
     assert.equal(artifact.status, 200);

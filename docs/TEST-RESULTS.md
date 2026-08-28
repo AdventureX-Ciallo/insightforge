@@ -6,16 +6,16 @@
 
 | 命令 | 结果 |
 |---|---|
-| `npm test` | PASS：93/93（87 个顶层测试，Path 1–6 矩阵含 6 个子测试） |
+| `npm test` | PASS：94/94（88 个顶层测试，Path 1–6 矩阵含 6 个子测试） |
 | `npm run coverage` | PASS：`src/**` 语句/分支/函数/行均 100% |
 | `npm run verify` | PASS：类型检查、100% 覆盖率门禁、生产构建、密钥扫描 |
-| `npm run fuzz` | PASS：seed `520628262`，六套累计 520,030 例；5,111 行源码对应 101.75 例/行；10.576 s |
-| `npm run fuzz:report` | PASS：同 seed 520,030 例，10.397 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
+| `npm run fuzz` | PASS：seed `520628262`，六套累计 522,030 例；5,138 行源码对应 101.60 例/行；结构套件含至少 6,000 次完整图单边变质 |
+| `npm run fuzz:report` | PASS：同 seed 522,030 例，13.822 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
 | `NODE_ENV=test node --import tsx --test tests/sse.test.ts` | PASS：2/2；真实 ReadableStream、心跳、终态关流、断开清理与跨 run 隔离 |
-| `npm run test:e2e` | ENV BLOCKED：重试 2 次，Chromium 均在断言执行前因 `MachPortRendezvousServer … Permission denied (1100)` 退出；此前有 1/1 通过记录，但不作为本轮新鲜 PASS |
-| `npm run demo:triple` | PASS：3/3；400/113/106 ms，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
+| `npm run test:e2e` | PASS：1/1；真实 Chromium 入口完成黄金任务、审阅、来源更新和成果检查，4.3 s；等待真实写响应，避免假阳性 |
+| `npm run demo:triple` | PASS：3/3；441/95/89 ms，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
 | `npm run smoke` | PASS：生产构建服务、健康页与产品页 |
-| `npm run secret-scan` | PASS：223 个 tracked/untracked 文件，无凭据文件或常见 token 形状 |
+| `npm run secret-scan` | PASS：234 个 tracked/untracked 文件，无凭据文件或常见 token 形状 |
 | `npm run package:source -- /tmp/InsightForge-source-0828.zip` | PASS：仓库外生成 ZIP 与 manifest；实际大小、文件数和 SHA-256 以同轮 manifest 为准 |
 | `npm audit --audit-level=high` | PASS：0 vulnerabilities |
 
@@ -32,7 +32,7 @@ npm run smoke                  PASS
 npm audit --audit-level=high   PASS; 0 vulnerabilities
 ```
 
-以上 36/36 是扩展到当前 91 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。
+以上 36/36 是扩展到当前 94 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。
 
 ## 关键反证
 
@@ -53,9 +53,9 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 | Path 3 审查 | 伪造确认 INSUFFICIENT/STALE 结论 | 两类确认均抛错，不产生 HUMAN_CONFIRMED |
 | Path 4 边界 | 运行尚未完成时请求边界问题 | 返回 409，不伪装为完成结果 |
 | Path 5 交付 | 人工动作后重读 V1，并请求 V999 | V1 内容快照不变（仅 CURRENT→SUPERSEDED）；V999 返回 404 |
-| Path 6 更新 | DNS 同时返回公网与环回地址 | 搜索在 fetch 前拒绝，fetch 调用数为 0 |
+| Path 6 更新 | DNS 预检同时返回公网与环回地址 | 搜索在 fetch 前拒绝，fetch 调用数为 0；不据此声称消除再次解析的 TOCTOU |
 
-物理行统计口径为 `src/**/*.ts` 与 `tests/**/*.ts` 的 `wc -l`：生产 5,111 行，测试 3,814 行，测试/生产为 0.746:1（74.6%）。
+物理行统计口径为 `src/**/*.ts` 与 `tests/**/*.ts` 的 `wc -l`：生产 5,138 行，测试 3,841 行，测试/生产为 0.748:1（74.8%）。这与“随机执行用例/生产源码行”100:1 是不同指标。
 
 ## P4 SSE 与随机测试证据
 
@@ -64,13 +64,13 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 
 | 随机套件 | 用例数 | 实测耗时 | 可证伪不变量摘要 |
 |---|---:|---:|---|
-| 引擎随机走查 | 30 | 1.088 s | 注入失败传播；终态三选一；步骤消费链不断 |
-| ResearchRun 结构模糊 | 150,000 | 5.401 s | 合法图通过；递归畸形、类型污染 fail-closed |
-| HTTP API 模糊 | 5,000 | 1.052 s | 随机方法/路径/长输入/编码/NUL 不返回 5xx；服务保持健康 |
-| 审计变质 | 100,000 | 0.905 s | 删引用降级；同期间异值冲突；数值/类型变化改变输出 |
-| 上传模糊 | 165,000 | 1.179 s | 白名单外与穿越拒绝；随机字节失败有类型；成功文件 0600 |
-| SSRF 随机 | 100,000 | 0.731 s | 保留段/环回/畸形目标全部拒绝；fetch 调用数始终为 0 |
-| **合计** | **520,030** | **10.397 s** | **目标 511,100；达到 101.75 例/源码行** |
+| 引擎随机走查 | 30 | 0.687 s | 注入失败传播；终态三选一；步骤消费链不断 |
+| ResearchRun 结构模糊 | 152,000 | 8.958 s | 合法图通过；递归畸形/类型污染拒绝；≥6,000 个完整图单边变质 fail-closed |
+| HTTP API 模糊 | 5,000 | 1.218 s | 随机方法/路径/长输入/编码/NUL 不返回 5xx；服务保持健康 |
+| 审计变质 | 100,000 | 0.935 s | 删引用降级；同期间异值冲突；数值/类型变化改变输出 |
+| 上传模糊 | 165,000 | 1.230 s | 白名单外与穿越拒绝；随机字节失败有类型；成功文件 0600 |
+| SSRF 预检随机 | 100,000 | 0.749 s | 保留段/环回/畸形目标全部拒绝；fetch 调用数始终为 0 |
+| **合计** | **522,030** | **13.822 s** | **目标 513,800；达到 101.60 例/源码行** |
 
 ## PPTX 独立验收
 
@@ -87,5 +87,7 @@ Windows 桌面 Microsoft PowerPoint 当前不可用，因此 Windows 专项打�
 ## 当前产品入口边界
 
 后端上传→COLLECT、编辑/确认分离、理由/范围约束和历史成果接口已通过集成测试。ABloom 负责的当前 `public/` 尚未把上传 ID 带入运行、尚未拆开旧“保存并确认”交互，也未补理由/范围和成果历史展示，因此不声称 12 条 P0 全部完成。
+
+本轮 E2E 曾复现人工编辑与来源更新并发写导致状态覆盖；服务端现按 `runId` 串行化写操作，API 回归会并发发送两项操作并断言最终同时保留人工修订和来源 v2。页面 E2E 也改为等待真实 HTTP 响应，避免用原本就存在的 `PENDING_REVIEW` 文本制造假通过。
 
 在线单一提供方搜索已真实成功；固定白名单核验为 2/4 内容校验成功、2/4 如实失败。离线黄金案例仍只消费明确标记的快照。公开部署未获授权，也未执行。

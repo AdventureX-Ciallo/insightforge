@@ -11,7 +11,7 @@ import { runUploadFuzz } from "./upload.fuzz.js";
 
 const CASES = {
   engine: 30,
-  structure: 150_000,
+  structure: 152_000,
   api: 5_000,
   audit: 100_000,
   upload: 165_000,
@@ -52,7 +52,7 @@ async function main() {
 
   const engine = await runSuite(options.seed, "engine-random-walk", (rng) => runEngineFuzz(rng, CASES.engine), ["injected failures propagate", "terminal status remains one of three", "step consumption chain remains intact"]);
   results.push(engine.result);
-  const structure = await runSuite(options.seed, "research-run-structure", (rng) => runStructureFuzz(rng, CASES.structure, engine.value), ["legal ResearchRun values parse", "recursive malformed and type-polluted values fail closed"]);
+  const structure = await runSuite(options.seed, "research-run-structure", (rng) => runStructureFuzz(rng, CASES.structure, engine.value), ["legal ResearchRun values parse", "recursive malformed and type-polluted values fail closed", "at least 6,000 single-edge mutations of complete valid graphs fail closed"]);
   results.push(structure.result);
   const api = await runSuite(options.seed, "http-api", (rng) => runApiFuzz(rng, CASES.api), ["random methods, paths, encodings, NUL and bodies never return 5xx", "server remains healthy"]);
   results.push(api.result);

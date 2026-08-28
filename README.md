@@ -1,6 +1,6 @@
 # InsightForge
 
-> 当前状态（2026-08-28）：后端纵向切片已实现，Node/覆盖率/build/smoke/三连演示/密钥扫描与源码包门禁通过；前端仍由 ABloom 独立完善。当前受管沙箱禁止 Chromium 的 macOS Mach rendezvous，因此浏览器 E2E 需在可启动浏览器的环境复跑。尚未提交、推送、打 Tag、创建 PR 或部署。
+> 当前状态（2026-08-28）：后端纵向切片已实现，本地 Node/100% 覆盖率/build/Playwright E2E/smoke/三连演示/密钥扫描门禁通过；前端仍由 ABloom 独立完善。最终源码 ZIP 仍须在干净解压目录重跑同一组门禁。尚未提交、推送、打 Tag、创建 PR 或部署。
 
 `从一个行业问题，到一份能下钻、能质疑、能更新的研究成果。`
 
@@ -15,7 +15,7 @@ InsightForge 用同一个软件作品响应两个命题：
 
 - Node.js 20 或更高版本
 - npm（随 Node.js 安装）
-- Chromium 仅在运行 Playwright E2E 时需要；项目依赖已包含 Playwright
+- Chromium 仅在运行 Playwright E2E 时需要；首次执行 E2E 前运行 `npx playwright install chromium`
 
 项目不需要数据库。运行状态、上传和成果只写入项目下的 `.insightforge/`，服务端强制仅监听 loopback。
 
@@ -75,7 +75,7 @@ INSIGHTFORGE_LLM_MODEL=...
 2. `COLLECT`：读取明确标记的搜索快照、逐页 PDF 和 CSV v1，保留 URL、页码、列名与行号。
 3. `SYNTHESIZE`：模型缓存提出 4 条候选；程序校验证据、假设和数字，所有候选保持待复核。
 4. `AUDIT`：执行六类输入驱动规则；链接预先存在的估算假设，保留口径冲突，因果判断保持 `INSUFFICIENT_EVIDENCE`；最多自动修复一次。
-5. `DELIVER`：从同一证据快照生成 Markdown、可解析 PDF、五页可编辑 PPTX 与机器可读证据 JSON；交互式报告由当前页面提供。
+5. `DELIVER`：从同一证据快照生成 Markdown、可解析 PDF、五页可编辑 PPTX 与机器可读证据 JSON；交互式报告由当前页面提供。PDF 使用确定性的纯 Node CID/ActualText 路径，不启动浏览器，也不依赖 Python/ReportLab。
 
 演示内置 v1→v2 来源变化：相关 Datum/Claim/Conclusion 和人工确认失效，不相关结论保持不变，重算后生成新 `ArtifactVersion`，旧 MD/PDF/PPTX/JSON 不覆盖并可按版本下载。
 
@@ -88,7 +88,7 @@ INSIGHTFORGE_LLM_MODEL=...
 - `GET/POST /api/settings/llm`：单 HTTPS 模型端点配置；密钥只以掩码返回，设置以 `0600` 原子落盘并优先于环境变量。
 - `POST /api/sources/search`：选择 `bing / google / baidu`，只返回尚未成为证据的候选来源。
 
-每个 Source 都带权威度、新鲜度、完整度与综合置信度。低置信度来源对 Conclusion 的折扣说明保存在证据图中，不会被静默抬高。
+每个 Source 都带基于域名、时效与定位完整度的静态启发式分数。它不是第三方真实性认证，也不是统计置信区间；低分来源对 Conclusion 的折扣说明保存在证据图中，不会被静默抬高。
 
 ## 真实上传进入 COLLECT
 
@@ -99,11 +99,11 @@ POST /api/uploads
 POST /api/runs  { "researchQuestion": "...", "uploadIds": ["<upload UUID>"] }
 ```
 
-服务端会重新验证上传记录、路径、普通文件属性、字节大小和 SHA-256，再由 `local-file-reader` 解析 PDF 页码、CSV 行列、XLSX 工作表/单元格或 TXT。上传内容身份为 `USER_UPLOAD`，不会自动视为权威事实。最多每次任务 8 个文件，单文件上限 5 MiB，仅允许 PDF/CSV/XLSX/TXT。
+服务端会重新验证上传记录、路径、普通文件属性、字节大小和 SHA-256，再由 `local-file-reader` 解析 PDF 页码、CSV 行列、XLSX 工作表/单元格或 TXT。上传内容身份为 `USER_UPLOAD`，不会自动视为权威事实。黄金任务内置 5 个信源，因此每次任务最多再接收 5 个上传文件，任务总信源硬上限为 10；单文件上限 5 MiB，仅允许 PDF/CSV/XLSX/TXT。
 
 ## 真实搜索与权威核验
 
-- `POST /api/sources/search`：按 Bing、Google 或百度的固定域名发起一次搜索；只允许 HTTP/HTTPS，在请求前校验端口、凭据、精确 host 及 DNS 返回的每个地址，拒绝环回、私有、保留地址和重定向越界。
+- `POST /api/sources/search`：按 Bing、Google 或百度的固定域名发起一次搜索；只允许 HTTP/HTTPS，在请求前校验端口、凭据、精确 host 及 DNS 返回的每个地址，拒绝环回、私有、保留地址和重定向越界。该实现是 DNS 预检，不是 IP 固定连接；默认 `fetch` 的再次解析仍存在 DNS TOCTOU/重绑定残余风险，因此不能直接暴露到不可信网络。
 - `POST /api/sources/live-search`：固定使用一个 MediaWiki API，只输出 `CANDIDATE_SOURCE`，不自动成为权威证据。
 - `POST /api/sources/live-check`：只访问四个白名单 URL，校验主机、重定向、类型、大小、错误页、关键内容和 SHA-256；局部失败保持失败。
 - 离线黄金任务仍只消费本地快照，因此现场断网不影响核心流程。
@@ -140,7 +140,7 @@ POST /api/runs  { "researchQuestion": "...", "uploadIds": ["<upload UUID>"] }
 
 ## 后端测试门禁
 
-`npm run coverage` 使用 c8 对 `src/**` 执行全量测试并强制行覆盖率与分支覆盖率均为 100%。当前 Path 1–6 各有一个显式攻击用例，覆盖边界 preset 泄漏、失败伪成功、非法确认、未完成边界输出、旧版本改写和 DNS rebinding 请求前阻断。
+`npm run coverage` 使用 c8 对 `src/**` 执行全量测试并强制行覆盖率与分支覆盖率均为 100%。当前 Path 1–6 各有一个显式攻击用例，覆盖边界 preset 泄漏、失败伪成功、非法确认、未完成边界输出、旧版本改写和混合公网/私网 DNS 响应的请求前阻断。该用例不等同于消除 DNS TOCTOU。
 
 ## 文档入口
 

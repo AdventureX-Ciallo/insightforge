@@ -5,12 +5,12 @@
 │  index.html + app.js（vanilla，textContent 安全渲染）+ styles.css                                │
 │  首页(3预设+自定义) → 任务进度(五状态轨道) → 候选结论 → 审查修正 → 来源更新 → 成果交付(V1-V5)    │
 └───────────────────────────────────────┬──────────────────────────────────────────────────────┘
-                                        │ fetch 轮询（loopback 4399，CSP/no-referrer 硬化头）
+                                        │ fetch 轮询 + 可选 SSE（loopback 4399，CSP/no-referrer 硬化头）
 ┌───────────────────────────────────────▼──────────────────────────────────────────────────────┐
 │ HTTP 层  server.ts (547L)                                                                      │
-│  POST /api/runs · GET /api/runs/:id · POST /decisions · POST /source-update                    │
+│  POST /api/runs · GET /api/runs/:id · GET /api/runs/:id/events(SSE) · POST /decisions          │
 │  GET  /artifact-versions · GET /boundary-questions · GET/POST /api/settings/llm (key 掩码)     │
-│  POST /api/uploads (5MiB/类型/字节/路径校验, 0600, SHA-256) · POST /api/sources/search          │
+│  POST /api/uploads (5MiB/类型/字节/路径校验, 0600, SHA-256) · POST /source-update · /sources/search│
 │  GET  /api/presets · GET /artifacts/:kind (MD/PDF/PPTX/JSON 下载) · GET /api/current           │
 └───────────────────────────────────────┬──────────────────────────────────────────────────────┘
                                         │
@@ -39,15 +39,15 @@
 ┌──────▼────────────────▼───────────────▼────────────────▼─────────────────▼────────────────────┐
 │ 工具层 tools/                                                                                    │
 │  snapshot-search(离线索引) · pdf-reader(pdfjs逐页) · csv-calculator(确定性公式)                   │
-│  search-engines(154L)：Bing/Google/Baidu 真实 HTML 解析 + DNS 解析→IP 黑名单(v4/v6 全保留段)     │
-│                        →引擎域名白名单，三重 SSRF 防护                                            │
+│  search-engines：Bing/Google/Baidu HTML 解析 + 域名白名单 + 请求前 DNS/IP 黑名单预检             │
+│                  （默认 fetch 会再次解析 DNS，因此不声称已消除 DNS rebinding/TOCTOU）            │
 │  live-source-check(权威页核验) · upload-validator(类型/字节/穿越) · local-file-reader            │
 │                        (PDF/XLSX/CSV/TXT 结构化解析，XLSX=手写OOXML解包)                         │
-│  pptx-export(手写OOXML) · report-export(MD 纯文本 + PDF=Playwright Chromium 渲染)                │
+│  pptx-export(手写OOXML) · report-export(MD + 确定性纯 Node CID/ActualText PDF)                  │
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
 
 外部边界：DEEPSEEK/自配端点(HTTPS) · Bing/Google/Baidu(SSRF过滤) · 权威白名单域 · 无数据库(文件JSON)
 
-运行时依赖（全部，零传递）：jszip@3.10.1 · pdfjs-dist@5.4.149 · zod@3.25.76   [npm audit 0]
-开发依赖：playwright(PDF渲染+E2E) · c8(覆盖率门禁100) · tsx · typescript · @types/node（~120 含传递）
+直接运行时依赖：jszip@3.10.1 · pdfjs-dist@5.4.149 · zod@3.25.76；它们存在锁定的传递依赖，不能表述为“零传递”。
+开发依赖：playwright(页面 E2E) · c8(覆盖率门禁100) · tsx · typescript · @types/node。实际依赖树、漏洞数和安装体积以本轮 `npm ls` / `npm audit` / 干净安装结果为准。
 ```

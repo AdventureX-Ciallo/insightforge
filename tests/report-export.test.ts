@@ -7,6 +7,16 @@ import test from "node:test";
 import { runGoldenCase } from "../src/index.js";
 import { reportModel, writePdfReport } from "../src/tools/report-export.js";
 
+function utf16BeHex(value: string) {
+  const bytes = Buffer.from(value, "utf16le");
+  for (let index = 0; index < bytes.length; index += 2) {
+    const first = bytes[index]!;
+    bytes[index] = bytes[index + 1]!;
+    bytes[index + 1] = first;
+  }
+  return bytes.toString("hex").toUpperCase();
+}
+
 test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence snapshot", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-report-export-"));
   const run = await runGoldenCase({
@@ -27,23 +37,18 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
   }
 
   const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfBytes = await readFile(pdf.path);
   const document = await getDocument({
-    data: new Uint8Array(await readFile(pdf.path)),
+    data: new Uint8Array(pdfBytes),
     cMapUrl: `${resolve("node_modules/pdfjs-dist/cmaps")}/`,
     cMapPacked: true,
     standardFontDataUrl: `${resolve("node_modules/pdfjs-dist/standard_fonts")}/`,
   }).promise;
   assert.ok(document.numPages >= 1);
-  const pageTexts: string[] = [];
-  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-    const page = await document.getPage(pageNumber);
-    const content = await page.getTextContent();
-    pageTexts.push(content.items.map((item) => "str" in item ? item.str : "").join(" "));
+  const serializedPdf = pdfBytes.toString("ascii");
+  for (const text of ["InsightForge 研究报告", `研究问题：${run.researchQuestion}`, "来源定位"]) {
+    assert.ok(serializedPdf.includes(`/ActualText <FEFF${utf16BeHex(text)}>`), `PDF retains machine-readable text for ${text}`);
   }
-  const extracted = pageTexts.join("\n");
-  assert.match(extracted, /InsightForge 研究报告/u);
-  assert.match(extracted, /中国新能源乘用车渗透率/u);
-  assert.match(extracted, /来源定位/u);
 
   const sparseRun = structuredClone(run);
   sparseRun.conflicts = [];
@@ -56,65 +61,18 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
   assert.ok(sparseModel.sections.find((section) => section.heading === "证据")?.items.some((item) => item.includes("未提供定位")));
   assert.ok(sparseModel.sections.find((section) => section.heading === "证据")?.items.some((item) => item.includes("工作表 统计") && item.includes("单元格 A1:B2")));
 
-  class FakeElement {
-    className = "";
-    textContent = "";
-    children: FakeElement[] = [];
-    append(...items: FakeElement[]) { this.children.push(...items); }
-  }
-  const roots: Array<FakeElement | null> = [null, new FakeElement(), new FakeElement()];
-  const pdfCalls: unknown[] = [];
-  let pageCloses = 0;
-  let browserCloses = 0;
-  let launches = 0;
-  const fakeBrowser = {
-    async newPage() {
-      const root = roots.length > 0 ? roots.shift()! : new FakeElement();
-      return {
-        async setContent(html: string) { assert.match(html, /<main id="report">/u); },
-        async evaluate(callback: (value: unknown) => void, value: unknown) {
-          const previous = (globalThis as { document?: unknown }).document;
-          (globalThis as { document?: unknown }).document = {
-            title: "",
-            querySelector: () => root,
-            createElement: () => new FakeElement(),
-          };
-          try { callback(value); } finally { (globalThis as { document?: unknown }).document = previous; }
-        },
-        async pdf(options: unknown) { pdfCalls.push(options); },
-        async close() { pageCloses += 1; },
-      };
-    },
-    async close() { browserCloses += 1; },
-  };
-  const launcher = async () => {
-    launches += 1;
-    return fakeBrowser as never;
-  };
-  const fallbackPath = join(workspaceDir, "fake-browser-fallback.pdf");
-  await writePdfReport(sparseRun, fallbackPath, launcher);
-  const browserPath = join(workspaceDir, "fake-browser-success.pdf");
-  await writePdfReport(run, browserPath, launcher);
-  assert.equal(launches, 1, "a pending close is cancelled and the shared browser is reused");
-  assert.equal(pageCloses, 2);
-  assert.deepEqual(pdfCalls, [{ path: browserPath, format: "A4", printBackground: true, preferCSSPageSize: true }]);
-  await new Promise((resolveWait) => setTimeout(resolveWait, 150));
-  assert.equal(browserCloses, 1);
-
-  const launchFailurePdf = join(workspaceDir, "launch-failure.pdf");
-  await writePdfReport(run, launchFailurePdf, async () => { throw new Error("sandbox blocks browser"); });
-  const recovered = await getDocument({ data: new Uint8Array(await readFile(launchFailurePdf)) }).promise;
-  assert.ok(recovered.numPages >= 1);
-
   const previousPath = process.env.PATH;
   process.env.PATH = "";
   try {
-    await assert.rejects(writePdfReport(run, join(workspaceDir, "no-python.pdf")), /spawn python3 ENOENT/u);
+    const noExternalRuntimePath = join(workspaceDir, "no-external-runtime.pdf");
+    await writePdfReport(run, noExternalRuntimePath);
+    const noExternalRuntimeDocument = await getDocument({ data: new Uint8Array(await readFile(noExternalRuntimePath)) }).promise;
+    assert.ok(noExternalRuntimeDocument.numPages >= 1);
   } finally {
     process.env.PATH = previousPath;
   }
   await assert.rejects(
     writePdfReport(run, join(workspaceDir, "missing-parent", "report.pdf")),
-    /PDF fallback renderer failed/u,
+    /ENOENT/u,
   );
 });
