@@ -1,5 +1,7 @@
 # InsightForge
 
+![InsightForge 项目封面](docs/assets/insightforge-cover.png)
+
 > 最终提交状态（2026-08-30）：ABloom React 工作台、后端运行时与提交资产已经统一收口。当前证据为 197 个顶层测试、203/203 断言、`src/**` 四项覆盖率 100%、25/25 契约、770,000 例 fuzz、6/6 Chromium E2E 与最终源码包双轮干净验收；仓库 Topic 为 `shenicest-fission`。公开体验部署未执行，细节以 [最终提交说明](docs/SUBMISSION.md) 和 [测试记录](docs/TEST-RESULTS.md) 为准。
 
 ## 冻结源码制品

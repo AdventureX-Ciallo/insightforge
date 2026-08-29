@@ -87,6 +87,7 @@ ChatGPT Pro、Codex 与其他模型只作为工程研究、实现或审查工具
 
 ## 项目图片与视频
 
+- 项目封面：`docs/assets/insightforge-cover.png`
 - 主工作台：`docs/assets/insightforge-workbench.png`
 - 五状态任务链：`docs/assets/insightforge-task-chain.png`
 - 证据下钻：`docs/assets/insightforge-evidence-drilldown.png`
