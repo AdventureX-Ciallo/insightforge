@@ -193,7 +193,7 @@ const SYSTEM_PROMPT = [
 ].join("\n");
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{ finish_reason?: string | null; message?: { content?: string } }>;
 }
 
 export interface LlmPromptMessage {
@@ -226,39 +226,108 @@ export function promptMessagesSha256(messages: readonly LlmPromptMessage[]) {
 }
 
 class NonRetryableLlmError extends Error {}
+class RetryableLlmOutputError extends Error {}
+
+function parseChatCompletionContent(payload: ChatCompletionResponse): unknown {
+  const choice = payload.choices?.[0];
+  if (choice?.finish_reason === "length") {
+    throw new RetryableLlmOutputError("LLM response was truncated (finish_reason=length)");
+  }
+  const content = choice?.message?.content;
+  if (typeof content !== "string" || content.trim() === "") {
+    throw new RetryableLlmOutputError("LLM response has no message content (model may have exhausted max_tokens on reasoning before emitting content)");
+  }
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    throw new RetryableLlmOutputError("LLM response message content is not valid JSON");
+  }
+}
+
+function parseConclusionDrafts(parsed: unknown): LlmDraft[] {
+  const conclusions = parsed && typeof parsed === "object"
+    ? (parsed as { conclusions?: unknown }).conclusions
+    : undefined;
+  if (!Array.isArray(conclusions)) throw new RetryableLlmOutputError("LLM response is missing the conclusions array");
+  return conclusions.map((item) => {
+    const draft = item && typeof item === "object" ? item as Partial<LlmDraft> : {};
+    return {
+      text: typeof draft.text === "string" ? draft.text.trim() : "",
+      evidenceIds: Array.isArray(draft.evidenceIds) ? draft.evidenceIds.filter((id): id is string => typeof id === "string") : [],
+      assumptions: Array.isArray(draft.assumptions) ? draft.assumptions.filter((value): value is string => typeof value === "string") : [],
+      missingEvidence: Array.isArray(draft.missingEvidence) ? draft.missingEvidence.filter((value): value is string => typeof value === "string") : [],
+    };
+  });
+}
+
+function parsePlanDrafts(parsed: unknown): PlanStepDraft[] {
+  const steps = parsed && typeof parsed === "object"
+    ? (parsed as { steps?: unknown }).steps
+    : undefined;
+  if (!Array.isArray(steps)) throw new RetryableLlmOutputError("LLM response is missing the steps array");
+  return steps.map((item) => {
+    const draft = item && typeof item === "object" ? item as Partial<PlanStepDraft> : {};
+    return {
+      objective: typeof draft.objective === "string" ? draft.objective.trim() : "",
+      toolName: typeof draft.toolName === "string" ? draft.toolName.trim() : "",
+      expectedOutput: typeof draft.expectedOutput === "string" ? draft.expectedOutput.trim() : "",
+    };
+  });
+}
 
 /**
- * 同一模型、同一请求的传输层重试（最多 2 次）：仅覆盖连接被远端切断
- * （fetch reject，如 terminated/reset）与 429/5xx；4xx 鉴权类错误立即抛出。
+ * 同一模型、同一请求的有界重试（总共最多 2 次）：覆盖连接被远端切断
+ * （fetch reject，如 terminated/reset）、429/5xx，以及 HTTP 200 中空白或损坏的
+ * message.content；4xx 鉴权类错误立即抛出。
  * 这不是模型 fallback——不换端点、不换模型、不降级。
  */
-async function postChatCompletion(config: LlmConfig, body: unknown, timeoutMs: number, retryDelayMs: number): Promise<ChatCompletionResponse> {
-  let lastError: unknown;
+async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (value: unknown) => T, timeoutMs: number, retryDelayMs: number): Promise<T> {
+  let lastError = new Error("LLM request failed after bounded retry");
+  const base = config.baseUrl.replace(/\/+$/u, "");
+  const endpoint = base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
+  const headers = { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` };
+  const serializedBody = JSON.stringify(body);
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const base = config.baseUrl.replace(/\/+$/u, "");
-      const endpoint = base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
+        headers,
         signal: controller.signal,
-        body: JSON.stringify(body),
+        body: serializedBody,
       });
-      if (response.ok) return (await response.json()) as ChatCompletionResponse;
+      if (response.ok) {
+        let payload: ChatCompletionResponse;
+        try {
+          payload = (await response.json()) as ChatCompletionResponse;
+        } catch {
+          throw new RetryableLlmOutputError("LLM endpoint returned an invalid JSON response envelope");
+        }
+        return parse(parseChatCompletionContent(payload));
+      }
       const error = new Error(`LLM endpoint returned ${response.status}`);
       if (response.status < 500 && response.status !== 429) throw new NonRetryableLlmError(error.message);
       lastError = error;
     } catch (error) {
       if (error instanceof NonRetryableLlmError) throw error;
-      lastError = error;
+      if (error instanceof RetryableLlmOutputError) {
+        lastError = error;
+      } else if (controller.signal.aborted) {
+        lastError = new Error("LLM request timed out");
+      } else if (error instanceof Error) {
+        // fetch implementations and proxy adapters may embed the endpoint,
+        // Authorization header, or request body in their error message.
+        lastError = new Error("LLM transport request failed");
+      } else {
+        lastError = new Error("LLM transport request failed with non-Error rejection");
+      }
     } finally {
       clearTimeout(timer);
     }
     if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
-  throw lastError instanceof Error ? lastError : new Error("LLM request failed after transport retry");
+  throw lastError;
 }
 
 /**
@@ -266,27 +335,14 @@ async function postChatCompletion(config: LlmConfig, body: unknown, timeoutMs: n
  * validateLlmDrafts 过滤（引用白名单、条数、文本长度）后才能进入证据链。
  */
 export async function draftConclusions(config: LlmConfig, context: LlmSynthesisContext, timeoutMs = 90_000, retryDelayMs = 1500): Promise<LlmDraft[]> {
-  const payload = await postChatCompletion(config, {
+  return postChatCompletion(config, {
     model: config.model,
     temperature: 0.2,
     // 推理型模型会先消耗思考 token 再输出 content；预算不足会在 content 为空时被截断。
     max_tokens: effectiveTokenBudget(config.synthesisMaxTokens, SYNTHESIS_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderConclusionMessages(context),
-  }, timeoutMs, retryDelayMs);
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM response has no message content (model may have exhausted max_tokens on reasoning before emitting content)");
-  const parsed = JSON.parse(content) as { conclusions?: unknown };
-  if (!Array.isArray(parsed.conclusions)) throw new Error("LLM response is missing the conclusions array");
-  return parsed.conclusions.map((item) => {
-    const draft = item as Partial<LlmDraft>;
-    return {
-      text: typeof draft.text === "string" ? draft.text.trim() : "",
-      evidenceIds: Array.isArray(draft.evidenceIds) ? draft.evidenceIds.filter((id): id is string => typeof id === "string") : [],
-      assumptions: Array.isArray(draft.assumptions) ? draft.assumptions.filter((v): v is string => typeof v === "string") : [],
-      missingEvidence: Array.isArray(draft.missingEvidence) ? draft.missingEvidence.filter((v): v is string => typeof v === "string") : [],
-    };
-  });
+  }, parseConclusionDrafts, timeoutMs, retryDelayMs);
 }
 
 /**
@@ -321,26 +377,14 @@ export function validateLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[]
  * 与 draftConclusions 一样不做可信校验——必须经 validatePlanSteps 裁决。
  */
 export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext, timeoutMs = 90_000, retryDelayMs = 1500): Promise<PlanStepDraft[]> {
-  const payload = await postChatCompletion(config, {
+  return postChatCompletion(config, {
     model: config.model,
     temperature: 0.2,
     // 推理型模型会先消耗思考 token 再输出 content；预算不足会在 content 为空时被截断。
     max_tokens: effectiveTokenBudget(config.planMaxTokens, PLAN_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderPlanMessages(context),
-  }, timeoutMs, retryDelayMs);
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM response has no message content (model may have exhausted max_tokens on reasoning before emitting content)");
-  const parsed = JSON.parse(content) as { steps?: unknown };
-  if (!Array.isArray(parsed.steps)) throw new Error("LLM response is missing the steps array");
-  return parsed.steps.map((item) => {
-    const draft = item as Partial<PlanStepDraft>;
-    return {
-      objective: typeof draft.objective === "string" ? draft.objective.trim() : "",
-      toolName: typeof draft.toolName === "string" ? draft.toolName.trim() : "",
-      expectedOutput: typeof draft.expectedOutput === "string" ? draft.expectedOutput.trim() : "",
-    };
-  });
+  }, parsePlanDrafts, timeoutMs, retryDelayMs);
 }
 
 /**

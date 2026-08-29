@@ -136,10 +136,10 @@ test("LLM transport does not retry 4xx and retries 429, 5xx, network, and non-Er
   }
 
   calls = 0;
-  await assert.rejects(withFetch(async () => { calls += 1; throw new Error("network reset"); }, () => draftPlanSteps(config, planContext, 100, 0)), /network reset/u);
+  await assert.rejects(withFetch(async () => { calls += 1; throw new Error("network reset"); }, () => draftPlanSteps(config, planContext, 100, 0)), /transport request failed/u);
   assert.equal(calls, 2);
 
-  await assert.rejects(withFetch(async () => { throw "reset"; }, () => draftPlanSteps(config, planContext, 100, 0)), /failed after transport retry/u);
+  await assert.rejects(withFetch(async () => { throw "reset"; }, () => draftPlanSteps(config, planContext, 100, 0)), /non-Error rejection/u);
 
   let exactEndpoint = "";
   await withFetch(async (input) => {
@@ -149,10 +149,129 @@ test("LLM transport does not retry 4xx and retries 429, 5xx, network, and non-Er
   assert.equal(exactEndpoint, "https://model.example.test/v1/chat/completions");
 });
 
+test("LLM transport and timeout failures are categorized without leaking request secrets", async () => {
+  const leakedContext = `${config.apiKey}:${config.baseUrl}:${config.model}`;
+  let calls = 0;
+  await assert.rejects(withFetch(async () => {
+    calls += 1;
+    throw new Error(`adapter failure ${leakedContext}`);
+  }, () => draftPlanSteps(config, planContext, 100, 0)), (error) => {
+    assert.match(String(error), /transport request failed/u);
+    assert.doesNotMatch(String(error), new RegExp(`${config.apiKey}|${config.baseUrl}|${config.model}`, "u"));
+    return true;
+  });
+  assert.equal(calls, 2);
+
+  calls = 0;
+  await assert.rejects(withFetch((_input, init) => new Promise((_resolve, reject) => {
+    calls += 1;
+    init?.signal?.addEventListener("abort", () => reject(new Error(`aborted ${leakedContext}`)), { once: true });
+  }), () => draftPlanSteps(config, planContext, 1, 0)), (error) => {
+    assert.match(String(error), /request timed out/u);
+    assert.doesNotMatch(String(error), new RegExp(`${config.apiKey}|${config.baseUrl}|${config.model}`, "u"));
+    return true;
+  });
+  assert.equal(calls, 2);
+});
+
+test("LLM retries an HTTP 200 response with empty message content and succeeds on the second identical request", async () => {
+  let calls = 0;
+  const requestBodies: string[] = [];
+  const steps = await withFetch(async (_input, init) => {
+    calls += 1;
+    requestBodies.push(String(init?.body));
+    return calls === 1
+      ? jsonResponse({ choices: [{ message: { content: "" } }] })
+      : jsonResponse({ choices: [{ message: { content: JSON.stringify({ steps: [{ objective: "发现与问题相关的公开信源", toolName: "snapshot-search", expectedOutput: "候选信源" }] }) } }] });
+  }, () => draftPlanSteps(config, planContext, 100, 0));
+
+  assert.equal(calls, 2);
+  assert.equal(steps.length, 1);
+  assert.equal(requestBodies[0], requestBodies[1], "parse retry must keep the exact same request");
+});
+
+test("LLM retries structurally incomplete message JSON before failing the stage contract", async () => {
+  let calls = 0;
+  const drafts = await withFetch(async () => {
+    calls += 1;
+    return calls === 1
+      ? jsonResponse({ choices: [{ message: { content: "{}" } }] })
+      : jsonResponse({ choices: [{ message: { content: JSON.stringify({ conclusions: [{ text: "第二次结构完整的候选判断", evidenceIds: ["e1"], assumptions: [], missingEvidence: [] }] }) } }] });
+  }, () => draftConclusions(config, synthesisContext, 100, 0));
+
+  assert.equal(calls, 2);
+  assert.equal(drafts[0]?.text, "第二次结构完整的候选判断");
+});
+
+test("LLM retries output explicitly marked truncated even when its visible JSON is parseable", async () => {
+  let calls = 0;
+  const steps = await withFetch(async () => {
+    calls += 1;
+    const content = JSON.stringify({ steps: [{ objective: calls === 1 ? "截断响应中的可解析步骤" : "完整响应中的最终研究步骤", toolName: "snapshot-search", expectedOutput: "候选信源" }] });
+    return jsonResponse({ choices: [{ finish_reason: calls === 1 ? "length" : "stop", message: { content } }] });
+  }, () => draftPlanSteps(config, planContext, 100, 0));
+
+  assert.equal(calls, 2);
+  assert.equal(steps[0]?.objective, "完整响应中的最终研究步骤");
+});
+
+test("LLM retry snapshots endpoint, authorization, and serialized body before the first attempt", async () => {
+  const mutableConfig = { ...config };
+  const observations: Array<{ url: string; authorization: string | null; body: string }> = [];
+  await withFetch(async (input, init) => {
+    observations.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get("authorization"),
+      body: String(init?.body),
+    });
+    if (observations.length === 1) {
+      mutableConfig.baseUrl = "https://mutated.example.test/v1";
+      mutableConfig.apiKey = "mutated-secret";
+      mutableConfig.model = "mutated-model";
+      return jsonResponse({ choices: [] });
+    }
+    return jsonResponse({ choices: [{ message: { content: JSON.stringify({ steps: [] }) } }] });
+  }, () => draftPlanSteps(mutableConfig, planContext, 100, 0));
+
+  assert.equal(observations.length, 2);
+  assert.deepEqual(observations[1], observations[0]);
+  assert.equal(observations[0]?.url, "https://model.example.test/v1/chat/completions");
+  assert.equal(observations[0]?.authorization, "Bearer test-secret");
+  assert.equal((JSON.parse(observations[0]!.body) as { model: string }).model, "test-model");
+});
+
+test("LLM mixed retry failures share two attempts and expose only the final sanitized category", async () => {
+  const responseSecret = "response-body-must-not-leak";
+  let calls = 0;
+  await assert.rejects(withFetch(async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("network reset");
+    return jsonResponse({ choices: [{ message: { content: responseSecret } }] });
+  }, () => draftConclusions(config, synthesisContext, 100, 0)), (error) => {
+    assert.match(String(error), /message content is not valid JSON/u);
+    assert.doesNotMatch(String(error), new RegExp(`${responseSecret}|${config.apiKey}`, "u"));
+    return true;
+  });
+  assert.equal(calls, 2);
+
+  calls = 0;
+  await assert.rejects(withFetch(async () => {
+    calls += 1;
+    return calls === 1
+      ? jsonResponse({ choices: [{ message: { content: "{" } }] })
+      : jsonResponse({}, 500);
+  }, () => draftPlanSteps(config, planContext, 100, 0)), /returned 500/u);
+  assert.equal(calls, 2);
+});
+
 test("LLM response validation rejects empty/missing arrays and normalizes hostile draft field types", async () => {
   await assert.rejects(withFetch(async () => jsonResponse({ choices: [] }), () => draftConclusions(config, synthesisContext, 100, 0)), /no message content/u);
   await assert.rejects(withFetch(async () => jsonResponse({ choices: [{ message: { content: "{}" } }] }), () => draftConclusions(config, synthesisContext, 100, 0)), /missing the conclusions array/u);
-  const rawDrafts = [{ text: "  valid conclusion text  ", evidenceIds: ["e1", 7], assumptions: ["a", 7], missingEvidence: ["gap", 7] }, { text: 7, evidenceIds: 7, assumptions: null, missingEvidence: {} }];
+  for (const content of ["null", '"scalar"']) {
+    await assert.rejects(withFetch(async () => jsonResponse({ choices: [{ message: { content } }] }), () => draftConclusions(config, synthesisContext, 100, 0)), /missing the conclusions array/u);
+  }
+  await assert.rejects(withFetch(async () => new Response("invalid-outer-json", { headers: { "content-type": "application/json" } }), () => draftConclusions(config, synthesisContext, 100, 0)), /invalid JSON response envelope/u);
+  const rawDrafts = [{ text: "  valid conclusion text  ", evidenceIds: ["e1", 7], assumptions: ["a", 7], missingEvidence: ["gap", 7] }, { text: 7, evidenceIds: 7, assumptions: null, missingEvidence: {} }, null, 7];
   let posted = "";
   const drafts = await withFetch(async (_input, init) => {
     posted = String(init?.body);
@@ -160,6 +279,8 @@ test("LLM response validation rejects empty/missing arrays and normalizes hostil
   }, () => draftConclusions(config, synthesisContext, 100, 0));
   assert.deepEqual(drafts, [
     { text: "valid conclusion text", evidenceIds: ["e1"], assumptions: ["a"], missingEvidence: ["gap"] },
+    { text: "", evidenceIds: [], assumptions: [], missingEvidence: [] },
+    { text: "", evidenceIds: [], assumptions: [], missingEvidence: [] },
     { text: "", evidenceIds: [], assumptions: [], missingEvidence: [] },
   ]);
   const synthesisRequest = JSON.parse(posted) as { messages: Array<{ role: string; content: string }> };
@@ -174,10 +295,15 @@ test("LLM response validation rejects empty/missing arrays and normalizes hostil
 
   await assert.rejects(withFetch(async () => jsonResponse({ choices: [] }), () => draftPlanSteps(config, planContext, 100, 0)), /no message content/u);
   await assert.rejects(withFetch(async () => jsonResponse({ choices: [{ message: { content: "{}" } }] }), () => draftPlanSteps(config, planContext, 100, 0)), /missing the steps array/u);
-  const steps = await withFetch(async () => jsonResponse({ choices: [{ message: { content: JSON.stringify({ steps: [{ objective: 7, toolName: null, expectedOutput: {} }, { objective: "  objective  ", toolName: " tool ", expectedOutput: " output " }] }) } }] }), () => draftPlanSteps(config, planContext, 100, 0));
+  for (const content of ["null", '"scalar"']) {
+    await assert.rejects(withFetch(async () => jsonResponse({ choices: [{ message: { content } }] }), () => draftPlanSteps(config, planContext, 100, 0)), /missing the steps array/u);
+  }
+  const steps = await withFetch(async () => jsonResponse({ choices: [{ message: { content: JSON.stringify({ steps: [{ objective: 7, toolName: null, expectedOutput: {} }, { objective: "  objective  ", toolName: " tool ", expectedOutput: " output " }, null, 7] }) } }] }), () => draftPlanSteps(config, planContext, 100, 0));
   assert.deepEqual(steps, [
     { objective: "", toolName: "", expectedOutput: "" },
     { objective: "objective", toolName: "tool", expectedOutput: "output" },
+    { objective: "", toolName: "", expectedOutput: "" },
+    { objective: "", toolName: "", expectedOutput: "" },
   ]);
 });
 

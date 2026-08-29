@@ -148,7 +148,7 @@ test("live PLAN and SYNTHESIZE reject invalid model programs without determinist
       return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { headers: { "content-type": "application/json" } });
     };
     await assert.rejects(runGoldenCase({ researchQuestion: question, fixtureDir: resolve("fixtures/golden"), workspaceDir: await workspace("insightforge-invalid-live-synthesis-"), llmMode: "auto", llmConfig: config }), /fewer than three/u);
-    assert.equal(call, 3, "one PLAN call and two bounded SYNTHESIZE attempts");
+    assert.equal(call, 2, "one PLAN call and one SYNTHESIZE request with one shared two-attempt retry budget");
   } finally {
     globalThis.fetch = originalFetch;
   }

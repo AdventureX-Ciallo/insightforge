@@ -389,11 +389,8 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       const config = liveConfig!;
       const synthesisContext = { question: options.researchQuestion, sources, evidence, data: seed.data };
       const synthesisPromptSha256 = promptMessagesSha256(renderConclusionMessages(synthesisContext));
-      let valid: ReturnType<typeof validateLlmDrafts> = [];
-      for (let attempt = 1; attempt <= 2 && valid.length < 3; attempt += 1) {
-        const drafts = await recordTool(options, events, "llm-synthesizer", `单一端点模型提出候选（有界传输尝试 ${attempt}/2）`, () => draftConclusions(config, synthesisContext));
-        valid = validateLlmDrafts(drafts, evidence.map((item) => item.id));
-      }
+      const drafts = await recordTool(options, events, "llm-synthesizer", "单一端点模型提出候选（同一请求共享最多两次传输/解析尝试）", () => draftConclusions(config, synthesisContext));
+      const valid = validateLlmDrafts(drafts, evidence.map((item) => item.id));
       if (valid.length < 3) throw new Error("Live model produced fewer than three schema-valid, evidence-linked candidates");
       synthesis = bundleFromLlmDrafts(valid, { data: seed.data, sources, evidence });
       synthesis.assumptions.push(...seed.assumptions);
