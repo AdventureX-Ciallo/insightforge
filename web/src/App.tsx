@@ -99,7 +99,7 @@ function StepNav({
 }
 
 export default function App() {
-  const { phase, conclusions, view, runId } = useApp()
+  const { phase, conclusions, sourceUpdate, view, runId } = useApp()
   const [step, setStep] = useState(0)
   const [drawerId, setDrawerId] = useState<string | null>(null)
   const [dialog, setDialog] = useState<{ id: string; mode: DialogMode } | null>(null)
@@ -110,7 +110,7 @@ export default function App() {
   }, [])
 
   /* 门禁：任务交付 → 至少一条人工决定才进变化；交付完成即可查看 */
-  const decided = conclusions.some((c) => c.decision || c.originType === 'HUMAN_EDITED')
+  const decided = conclusions.some((c) => c.decision || c.originType === 'HUMAN_EDITED') || sourceUpdate.applied
   const unlocked = [true, true, phase === 'done', decided, phase === 'done']
 
   useEffect(() => {

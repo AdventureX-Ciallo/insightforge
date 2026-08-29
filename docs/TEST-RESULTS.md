@@ -1,6 +1,6 @@
 # 独立测试结果
 
-> 状态：`CURRENT — 2026-08-29`。这是本地 React 工作台、后端与交付物证据，不代表 Windows PowerPoint 或公开部署已经完成。
+> 状态：`FINAL — 2026-08-30`。当前 React 工作台、后端、提交图片、演示视频与最终源码包均已验收；Windows PowerPoint、公开体验部署和真实用户验证仍未完成。
 
 ## 当前工作树门禁
 
@@ -18,10 +18,10 @@
 | 生产进程 SIGTERM | PASS：`PORT=0` 启动后收到 SIGTERM，输出优雅停机消息并以退出码 0 结束 |
 | `npm run contract:check` | PASS：25/25；JSON 报告写入 `.insightforge/contract-check-report.json` |
 | `npm run secret-scan` | PASS：清理构建/运行产物后的源码树共扫描 222 个 tracked/untracked 且未被忽略的文件，无凭据文件或常见 token 形状；构建产物存在时的扩大扫描也曾覆盖 1,446 个文件并通过 |
-| `npm run package:source -- /tmp/InsightForge-source-0828.zip` | 当前工作树未执行：按所有者要求推迟到前端冻结；收口前旧包及 manifest 的 PASS 仅列于下节历史预检 |
+| `npm run package:source -- <桌面最终提交包>/源码/InsightForge-source-final.zip` | PASS：从最终提交 commit 生成；commit、大小、文件数与 SHA-256 写入包外 manifest，源码包本身不自引用哈希 |
 | `npm audit --audit-level=high` | PASS：0 vulnerabilities；首轮审计端点 `socket hang up`，重试成功后才记录该结论 |
 
-## 此前干净源码包预检
+## 历史预检与最终双轮验收
 
 源码打包器排除 `.git`、`node_modules`、`dist`、`.insightforge`、缓存、构建/测试产物、浏览器录制、日志、ZIP、`.env*`（仅保留 `.env.example`）及常见凭据文件，并拒绝符号链接。预检包解压到全新目录后执行：
 
@@ -34,7 +34,7 @@ npm run smoke                  PASS
 npm audit --audit-level=high   PASS; 0 vulnerabilities
 ```
 
-以上 36/36 是扩展到当前 188 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。SHA-256 前缀 `30601c95` 的已验 ZIP 是本轮收口前基线，本节新增改动尚未重新打包，不能把旧哈希说成当前工作树哈希。
+以上 36/36 是扩展到当前测试矩阵前的历史预检记录，不替代最终门禁。最终源码包随后在两个全新目录完成 `npm ci`、`npm run verify`、6/6 E2E、三连演示、smoke 和高危依赖审计；其名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json` 和桌面验收报告中。
 
 ## 关键反证
 
@@ -96,7 +96,7 @@ Windows 桌面 Microsoft PowerPoint 当前不可用，因此 Windows 专项打�
 
 ## 当前产品入口边界
 
-React 工作台已把上传 ID 带入同一运行的 COLLECT，拆分编辑/确认，采集理由与适用范围，并展示正交状态、来源变化和成果版本历史。真实 Chromium 主链与后端集成测试同时通过；P0-01 的最终源码 ZIP 双轮干净解包验收仍未执行，因此仍不声称整体 MVP 已完成。
+React 工作台已把上传 ID 带入同一运行的 COLLECT，拆分编辑/确认，采集理由与适用范围，并展示正交状态、来源变化和成果版本历史。真实 Chromium 主链、后端集成测试和最终源码 ZIP 双轮干净解包验收均已通过；当前提交图片与演示视频也由同一 React 入口重新生成。
 
 本轮 E2E 曾复现人工编辑与来源更新并发写导致状态覆盖；服务端现按 `runId` 串行化写操作，API 回归会并发发送两项操作并断言最终同时保留人工修订和来源 v2。页面 E2E 也改为等待真实 HTTP 响应，避免用原本就存在的 `PENDING_REVIEW` 文本制造假通过。
 

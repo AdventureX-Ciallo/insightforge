@@ -46,15 +46,20 @@ test("React workbench completes the evidence, decision, update, and delivery pat
   await expect(evidenceDialog.getByText("Locator", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "关闭证据抽屉" }).click();
 
-  await conclusions.first().getByRole("button", { name: "驳回" }).click();
-  await page.getByRole("dialog", { name: "驳回结论" }).getByRole("button", { name: "确认驳回" }).click();
-  await expect(conclusions.first().getByText(/已驳回/u)).toBeVisible({ timeout: 15_000 });
+  await conclusions.first().getByRole("button", { name: "确认" }).click();
+  const decisionDialog = page.getByRole("dialog", { name: "确认结论" });
+  await decisionDialog.getByLabel("决定理由").fill("保留双值，不把不同统计口径合并为一个事实。");
+  await decisionDialog.getByLabel("适用范围").fill("仅适用于 2024 年中国新能源乘用车与全汽车销量口径对照。");
+  await decisionDialog.getByRole("button", { name: "显式确认" }).click();
+  await expect(conclusions.first().getByText(/已确认/u)).toBeVisible({ timeout: 15_000 });
 
   await page.getByRole("button", { name: /第 4 步 · 变化/u }).click();
   await page.getByRole("button", { name: "检查来源更新" }).click();
   await expect(page.getByText("v2 已应用")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/STALE/u).first()).toBeVisible();
   await expect(page.getByText(/重算结果/u)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "来源更新，精确影响成果" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /第 4 步 · 变化/u })).toHaveAttribute("aria-current", "step");
 
   await page.getByRole("button", { name: /第 3 步 · 研究报告/u }).click();
   const staleConclusion = page.locator("#chapter-report article").filter({ hasText: "STALE" }).first();
