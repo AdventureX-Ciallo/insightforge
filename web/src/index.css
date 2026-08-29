@@ -1,0 +1,167 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Design tokens ────────────────────────────────────────────── */
+:root {
+  --paper: 250 247 242;        /* warm paper */
+  --paper-alt: 243 239 232;    /* alternate paper */
+  --ink: 35 32 43;             /* deep ink violet */
+  --ink-soft: 92 88 104;
+  --ink-faint: 148 144 158;
+  --accent: 122 106 184;       /* quiet lavender — interaction only */
+
+  /* semantic state spectrum: the only saturated color on the page */
+  --supported: 74 124 89;      /* ink green  */
+  --conflict: 176 122 36;      /* amber      */
+  --insufficient: 168 74 62;   /* brick      */
+  --pending: 110 118 142;      /* slate blue */
+  --stale: 156 124 82;         /* faded ochre — aged paper */
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-paper text-ink font-sans;
+    font-feature-settings: 'ss01', 'cv05';
+  }
+  ::selection {
+    background: rgb(var(--accent) / 0.22);
+  }
+  /* quiet scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--ink) / 0.14);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track { background: transparent; }
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.7);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* glass is reserved for floating layers only: topbar, drawer, dialogs */
+  .glass {
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(22px) saturate(1.4);
+    -webkit-backdrop-filter: blur(22px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.75);
+    box-shadow:
+      0 8px 32px rgba(35, 32, 43, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+  .glass-strong {
+    background: rgba(252, 250, 246, 0.78);
+    backdrop-filter: blur(28px) saturate(1.5);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    border-left: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow: -16px 0 48px rgba(35, 32, 43, 0.12);
+  }
+  .hairline { border-color: rgb(var(--ink) / 0.08); }
+
+  /* editorial eyebrow: wide-tracked section label */
+  .eyebrow {
+    @apply font-sans font-bold uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.32em;
+    color: rgb(var(--ink-soft));
+  }
+
+  /* instrument readout: machine-produced values */
+  .readout {
+    @apply font-mono;
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* semantic chip — state always carries text, never color alone */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border font-medium whitespace-nowrap;
+    padding: 0.18rem 0.6rem;
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+  }
+  .chip-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+
+  /* primary action — the single hero button */
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-full font-semibold text-white select-none;
+    background: rgb(var(--ink));
+    padding: 0.8rem 1.9rem;
+    font-size: 0.92rem;
+    letter-spacing: 0.02em;
+    transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.4s cubic-bezier(0.22, 1, 0.36, 1), background 0.3s;
+    box-shadow: 0 10px 28px rgba(35, 32, 43, 0.22);
+  }
+  .btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 40px rgba(35, 32, 43, 0.28);
+    background: rgb(var(--accent));
+  }
+  .btn-primary:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ghost action — secondary decisions */
+  .btn-ghost {
+    @apply inline-flex items-center gap-1.5 rounded-full border font-medium select-none;
+    padding: 0.42rem 0.95rem;
+    font-size: 0.78rem;
+    border-color: rgb(var(--ink) / 0.16);
+    color: rgb(var(--ink-soft));
+    transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    border-color: rgb(var(--ink) / 0.4);
+    color: rgb(var(--ink));
+    transform: translateY(-1px);
+  }
+  .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+
+/* ─── motion: every animation has a motive ─────────────────────── */
+
+/* running step: a breathing ring — "thinking", not "loading" */
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.35); }
+  50% { box-shadow: 0 0 0 7px rgb(var(--accent) / 0); }
+}
+.animate-breathe { animation: breathe 2.2s cubic-bezier(0.22, 1, 0.36, 1) infinite; }
+
+/* the single ambient glow — nearly still, never competes with data */
+@keyframes glow-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(3%, -2%) scale(1.05); }
+}
+.animate-glow { animation: glow-drift 26s ease-in-out infinite; }
+
+/* live mode pulse dot */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.animate-pulse-dot { animation: pulse-dot 1.8s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  html { scroll-behavior: auto; }
+}
