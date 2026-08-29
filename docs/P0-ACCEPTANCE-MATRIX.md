@@ -4,6 +4,15 @@
 
 最终判定基于冻结后的产品合同、当前 React 入口、两次全新解压安装和完整自动门禁，不沿用首轮原型的历史 PASS。Windows PowerPoint、公开部署和真实用户验证仍作为 P0 之外的诚实风险保留。
 
+## 冻结源码制品
+
+- ZIP：`InsightForge-source-final-b55ff73.zip`
+- 基线：`b55ff738bd955b677b8ece825dcef57e8d1a0a88`
+- 大小：`600,069 bytes`
+- 文件数：`210`
+- SHA-256：`30ece798ba8ca50cd75c311f0d88a7a79b95a6ddcd863f17f31e81b72517ca4a`
+- 双轮验收：两轮均通过 `npm ci`、`verify`、`6/6 E2E`、`3/3`、`smoke` 和 `audit`。
+
 | 编号 | 状态 | 必须取得的验收信号及需要重查的历史证据 |
 |---|---|---|
 | P0-01 干净环境可运行 | 通过 | 最终源码包分别解压到两个无 Git、依赖、构建和运行状态的新目录；两轮均完成 `npm ci`、verify、E2E、三连跑、smoke 与 audit。`.env.example` 和一键离线案例具备；commit、大小与 SHA-256 由包外 manifest 记录。 |

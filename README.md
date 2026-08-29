@@ -2,6 +2,15 @@
 
 > 最终提交状态（2026-08-30）：ABloom React 工作台、后端运行时与提交资产已经统一收口。当前证据为 197 个顶层测试、203/203 断言、`src/**` 四项覆盖率 100%、25/25 契约、770,000 例 fuzz、6/6 Chromium E2E 与最终源码包双轮干净验收；仓库 Topic 为 `shenicest-fission`。公开体验部署未执行，细节以 [最终提交说明](docs/SUBMISSION.md) 和 [测试记录](docs/TEST-RESULTS.md) 为准。
 
+## 冻结源码制品
+
+- ZIP：`InsightForge-source-final-b55ff73.zip`
+- 基线：`b55ff738bd955b677b8ece825dcef57e8d1a0a88`
+- 大小：`600,069 bytes`
+- 文件数：`210`
+- SHA-256：`30ece798ba8ca50cd75c311f0d88a7a79b95a6ddcd863f17f31e81b72517ca4a`
+- 双轮验收：两轮均通过 `npm ci`、`verify`、`6/6 E2E`、`3/3`、`smoke` 和 `audit`。
+
 `从一个行业问题，到一份能下钻、能质疑、能更新的研究成果。`
 
 InsightForge 用同一个软件作品响应两个命题：

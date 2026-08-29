@@ -5,7 +5,7 @@
 ## 评委与提交入口
 
 1. `SUBMISSION.md`：作品信息、背景、目标用户、创新、团队、过程、验证、边界与后续计划。
-2. `DEMO-SCRIPT.md`：与当前 React UI 按钮和文案一致的五分钟讲稿。
+2. `DEMO-SCRIPT.md`：唯一有效的五分钟讲稿，与当前 React UI 按钮和文案一致。
 3. `P0-ACCEPTANCE-MATRIX.md`：十二条 P0 最终判定与反证。
 4. `TEST-RESULTS.md`：自动门禁、外部环境和交付物验证。
 5. `VERIFICATION-EVIDENCE.md`：证据索引和诚实边界。
@@ -22,6 +22,7 @@
 | `USER-FLOWS.md` | 主流程、失败流程、人工决定与来源更新 | FROZEN |
 | `FRONTEND-REQUIREMENTS.md` | React 信息架构、状态、交互和可访问性 | IMPLEMENTED |
 | `PROJECT-SPECIFICATION.md` | 对外项目说明、技术栈、创新和团队分工 | FINAL |
+| `BUSINESS-HYPOTHESES.md` | 商业假设、包装方式、验证设计与停止条件 | CURRENT HYPOTHESES |
 | `GOLDEN-CASE-SPEC.md` | 黄金问题、来源、冲突、不足与更新反证 | FROZEN |
 | `GOLDEN-SOURCE-MANIFEST.md` | 原始、派生、合成资料和哈希边界 | FROZEN |
 | `RESEARCH-OBJECT-MODEL.md` | 证据图、状态轴和 ArtifactVersion | IMPLEMENTED |
@@ -40,7 +41,7 @@
 
 ## 历史和复盘
 
-`DECISION-LOG.md`、`RISK-REGISTER.md`、`PRODUCT-DOC-AUDIT.md`、`DUAL-AGENT-REVIEW.md`、`REFERENCE-PRODUCT-METHOD.md` 和各版本路线图保留当时的判断、权限和失败记录。它们是历史证据，不是当前完成状态；出现冲突时服从项目所有者最新要求、`SUBMISSION.md`、冻结 PRD 和真实测试结果。
+`PITCH-NARRATIVE.md`、`DECISION-LOG.md`、`RISK-REGISTER.md`、`PRODUCT-DOC-AUDIT.md`、`DUAL-AGENT-REVIEW.md`、`REFERENCE-PRODUCT-METHOD.md` 和各版本路线图保留当时的判断、权限和失败记录。它们是历史证据，不是当前讲稿或完成状态；出现冲突时服从项目所有者最新要求、`DEMO-SCRIPT.md`、`SUBMISSION.md`、冻结 PRD 和真实测试结果。
 
 ## 当前发布边界
 
