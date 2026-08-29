@@ -62,6 +62,41 @@ test("schema lock rejects every forged cross-object edge and current-version inv
   rejected("claim STALE freshness requires STALE evidence", (run) => { run.claims[1]!.freshness = "STALE"; });
   rejected("source to unknown version", (run) => { run.sources[0]!.sourceVersionId = "missing-version"; });
   rejected("version to unknown source", (run) => { run.sourceVersions[0]!.sourceId = "missing-source"; });
+  const unknownUpstream = structuredClone(valid);
+  unknownUpstream.sourceVersions[0]!.upstreamSourceIds = ["missing-source"];
+  unknownUpstream.researchSnapshotId = computeResearchSnapshotId(unknownUpstream);
+  unknownUpstream.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = unknownUpstream.researchSnapshotId;
+  const unknownUpstreamResult = researchRunSchema.safeParse(unknownUpstream);
+  assert.equal(unknownUpstreamResult.success, false, "source-version provenance cannot point to an unknown upstream source");
+  if (!unknownUpstreamResult.success) assert.match(JSON.stringify(unknownUpstreamResult.error.issues), /upstream source/iu);
+  const crossOwnedSourceVersion = structuredClone(valid);
+  crossOwnedSourceVersion.sources[0]!.sourceVersionId = crossOwnedSourceVersion.sources[1]!.sourceVersionId;
+  const crossOwnedSourceVersionResult = researchRunSchema.safeParse(crossOwnedSourceVersion);
+  assert.equal(crossOwnedSourceVersionResult.success, false, "a source must point to its own current SourceVersion");
+  if (!crossOwnedSourceVersionResult.success) assert.match(JSON.stringify(crossOwnedSourceVersionResult.error.issues), /own current SourceVersion/iu);
+  const mismatchedSourceVersion = structuredClone(valid);
+  const mismatchedSource = mismatchedSourceVersion.sources[0]!;
+  mismatchedSourceVersion.sourceVersions.find((item) => item.id === mismatchedSource.sourceVersionId)!.version = "v2";
+  mismatchedSourceVersion.researchSnapshotId = computeResearchSnapshotId(mismatchedSourceVersion);
+  mismatchedSourceVersion.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = mismatchedSourceVersion.researchSnapshotId;
+  const mismatchedSourceVersionResult = researchRunSchema.safeParse(mismatchedSourceVersion);
+  assert.equal(mismatchedSourceVersionResult.success, false, "a source label must match its current SourceVersion label");
+  if (!mismatchedSourceVersionResult.success) assert.match(JSON.stringify(mismatchedSourceVersionResult.error.issues), /version label/iu);
+  const mismatchedSourceCapture = structuredClone(valid);
+  mismatchedSourceCapture.sources[0]!.capturedAt = "different-capture-time";
+  mismatchedSourceCapture.researchSnapshotId = computeResearchSnapshotId(mismatchedSourceCapture);
+  mismatchedSourceCapture.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = mismatchedSourceCapture.researchSnapshotId;
+  const mismatchedSourceCaptureResult = researchRunSchema.safeParse(mismatchedSourceCapture);
+  assert.equal(mismatchedSourceCaptureResult.success, false, "a source capture time must match its current SourceVersion");
+  if (!mismatchedSourceCaptureResult.success) assert.match(JSON.stringify(mismatchedSourceCaptureResult.error.issues), /capture time/iu);
+  const mismatchedSourceLocator = structuredClone(valid);
+  const mismatchedLocatorSource = mismatchedSourceLocator.sources.find((item) => item.locator.fileName === "market_v1.csv")!;
+  mismatchedLocatorSource.locator = { ...mismatchedLocatorSource.locator, fileName: "different.csv" };
+  mismatchedSourceLocator.researchSnapshotId = computeResearchSnapshotId(mismatchedSourceLocator);
+  mismatchedSourceLocator.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = mismatchedSourceLocator.researchSnapshotId;
+  const mismatchedSourceLocatorResult = researchRunSchema.safeParse(mismatchedSourceLocator);
+  assert.equal(mismatchedSourceLocatorResult.success, false, "a source locator must match its current SourceVersion");
+  if (!mismatchedSourceLocatorResult.success) assert.match(JSON.stringify(mismatchedSourceLocatorResult.error.issues), /locator/iu);
   rejected("source without one current version", (run) => {
     for (const version of run.sourceVersions.filter((item) => item.sourceId === run.sources[0]!.id)) version.isCurrent = false;
   });
@@ -86,6 +121,13 @@ test("schema lock rejects every forged cross-object edge and current-version inv
     run.conclusions[0]!.sourceIds = run.conclusions[0]!.sourceIds.filter((id) => id !== run.sources.at(-1)!.id);
   });
   rejected("conclusion to unknown revision", (run) => { run.conclusions[0]!.currentRevisionId = "missing-revision"; });
+  const crossOwnedRevision = structuredClone(valid);
+  crossOwnedRevision.conclusions[0]!.currentRevisionId = crossOwnedRevision.conclusions[1]!.currentRevisionId;
+  crossOwnedRevision.researchSnapshotId = computeResearchSnapshotId(crossOwnedRevision);
+  crossOwnedRevision.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = crossOwnedRevision.researchSnapshotId;
+  const crossOwnedRevisionResult = researchRunSchema.safeParse(crossOwnedRevision);
+  assert.equal(crossOwnedRevisionResult.success, false, "a conclusion must point to its own current CandidateRevision");
+  if (!crossOwnedRevisionResult.success) assert.match(JSON.stringify(crossOwnedRevisionResult.error.issues), /own current CandidateRevision/iu);
   rejected("insufficient conclusion without gap", (run) => {
     run.conclusions[0]!.normalizedEvidenceStatus = "INSUFFICIENT_EVIDENCE";
     run.conclusions[0]!.evidenceGapIds = [];
@@ -107,6 +149,16 @@ test("schema lock rejects every forged cross-object edge and current-version inv
   });
   rejected("revision to unknown conclusion", (run) => { run.candidateRevisions[0]!.conclusionId = "missing-conclusion"; });
   rejected("revision to unknown parent", (run) => { run.candidateRevisions[0]!.parentRevisionId = "missing-parent"; });
+  rejected("revision parent from another conclusion", (run) => {
+    run.candidateRevisions[0]!.parentRevisionId = run.candidateRevisions.find((item) => item.conclusionId !== run.candidateRevisions[0]!.conclusionId)!.id;
+  });
+  const cyclicRevisionChain = structuredClone(valid);
+  cyclicRevisionChain.candidateRevisions[0]!.parentRevisionId = cyclicRevisionChain.candidateRevisions[0]!.id;
+  cyclicRevisionChain.researchSnapshotId = computeResearchSnapshotId(cyclicRevisionChain);
+  cyclicRevisionChain.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = cyclicRevisionChain.researchSnapshotId;
+  const cyclicRevisionChainResult = researchRunSchema.safeParse(cyclicRevisionChain);
+  assert.equal(cyclicRevisionChainResult.success, false, "a revision ancestry chain cannot contain a cycle");
+  if (!cyclicRevisionChainResult.success) assert.match(JSON.stringify(cyclicRevisionChainResult.error.issues), /cycle/iu);
   rejected("conclusion without one current revision", (run) => {
     for (const revision of run.candidateRevisions.filter((item) => item.conclusionId === run.conclusions[0]!.id)) revision.isCurrent = false;
   });

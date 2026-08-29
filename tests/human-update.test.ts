@@ -120,9 +120,11 @@ test("source v2 selectively invalidates confirmation, recalculates, and refreshe
 
   const v2Csv = await readFile(resolve("fixtures/golden/market_v2.csv"), "utf8");
   const v2Fields = v2Csv.trim().split("\n").find((line) => line.startsWith("2024,"))!.split(",").map(Number);
+  const v2Version = updated.sourceVersions.find((item) => item.sourceId === "source-market-csv" && item.version === "v2");
 
   assert.equal(updated.sourceVersion, "v2");
-  for (const requiredId of ["claim-penetration", "conclusion-penetration", "datum-penetration", "evidence-market-csv", "source-market-csv", "source-version-market-csv-v1", "source-version-market-csv-v2"]) {
+  assert.ok(v2Version);
+  for (const requiredId of ["claim-penetration", "conclusion-penetration", "datum-penetration", "evidence-market-csv", "source-market-csv", "source-version-market-csv-v1", v2Version.id]) {
     assert.ok(updated.affectedObjectIds.includes(requiredId), `affected objects include ${requiredId}`);
   }
   const affected = updated.conclusions.find((item) => item.id === "conclusion-penetration");

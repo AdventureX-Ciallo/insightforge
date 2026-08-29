@@ -850,6 +850,10 @@ function ids<T extends { id: string }>(items: T[]) {
   return new Set(items.map((item) => item.id));
 }
 
+function locatorCovers(source: SourceLocator, version: SourceLocator) {
+  return Object.entries(version).every(([key, value]) => JSON.stringify(source[key as keyof SourceLocator]) === JSON.stringify(value));
+}
+
 function graphIssue(ctx: z.RefinementCtx, path: Array<string | number>, message: string) {
   ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
 }
@@ -916,12 +920,30 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
   const conclusionIds = ids(run.conclusions);
   const revisionIds = ids(run.candidateRevisions);
   const artifactIds = ids([...run.artifacts, ...run.artifactHistory]);
+  const sourceVersionsById = new Map(run.sourceVersions.map((version) => [version.id, version]));
+  const revisionsById = new Map(run.candidateRevisions.map((revision) => [revision.id, revision]));
 
   run.sources.forEach((source, index) => {
     if (!sourceVersionIds.has(source.sourceVersionId)) graphIssue(ctx, ["sources", index, "sourceVersionId"], "Source points to an unknown SourceVersion");
+    const currentVersion = sourceVersionsById.get(source.sourceVersionId);
+    if (currentVersion && (currentVersion.sourceId !== source.id || !currentVersion.isCurrent)) {
+      graphIssue(ctx, ["sources", index, "sourceVersionId"], "Source must point to its own current SourceVersion");
+    }
+    if (currentVersion && currentVersion.version !== source.version) {
+      graphIssue(ctx, ["sources", index, "version"], "Source version label must match its current SourceVersion");
+    }
+    if (currentVersion && currentVersion.capturedAt !== source.capturedAt) {
+      graphIssue(ctx, ["sources", index, "capturedAt"], "Source capture time must match its current SourceVersion");
+    }
+    if (currentVersion && !locatorCovers(source.locator, currentVersion.locator)) {
+      graphIssue(ctx, ["sources", index, "locator"], "Source locator must match its current SourceVersion");
+    }
   });
   run.sourceVersions.forEach((version, index) => {
     if (!sourceIds.has(version.sourceId)) graphIssue(ctx, ["sourceVersions", index, "sourceId"], "SourceVersion points to an unknown Source");
+    for (const id of version.upstreamSourceIds) {
+      if (!sourceIds.has(id)) graphIssue(ctx, ["sourceVersions", index, "upstreamSourceIds"], `SourceVersion points to unknown upstream Source ${id}`);
+    }
   });
   for (const source of run.sources) {
     if (run.sourceVersions.filter((version) => version.sourceId === source.id && version.isCurrent).length !== 1) {
@@ -959,6 +981,10 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
       if (!conclusion.sourceIds.includes(discount.sourceId)) graphIssue(ctx, ["conclusions", index, "confidenceDiscounts"], `Confidence discount points to unrelated Source ${discount.sourceId}`);
     }
     if (!revisionIds.has(conclusion.currentRevisionId)) graphIssue(ctx, ["conclusions", index, "currentRevisionId"], "Conclusion points to unknown CandidateRevision");
+    const currentRevision = revisionsById.get(conclusion.currentRevisionId);
+    if (currentRevision && (currentRevision.conclusionId !== conclusion.id || !currentRevision.isCurrent)) {
+      graphIssue(ctx, ["conclusions", index, "currentRevisionId"], "Conclusion must point to its own current CandidateRevision");
+    }
     if (conclusion.normalizedReviewStatus !== normalizedReviewByLegacy[conclusion.reviewStatus]) graphIssue(ctx, ["conclusions", index, "normalizedReviewStatus"], "Raw and normalized review statuses disagree");
     if (conclusion.evidenceStatus === "STALE") {
       if (conclusion.freshness !== "STALE") graphIssue(ctx, ["conclusions", index, "freshness"], "STALE evidence requires STALE freshness");
@@ -973,6 +999,18 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
   run.candidateRevisions.forEach((revision, index) => {
     if (!conclusionIds.has(revision.conclusionId)) graphIssue(ctx, ["candidateRevisions", index, "conclusionId"], "CandidateRevision points to unknown Conclusion");
     if (revision.parentRevisionId && !revisionIds.has(revision.parentRevisionId)) graphIssue(ctx, ["candidateRevisions", index, "parentRevisionId"], "CandidateRevision points to unknown parent");
+    const parent = revision.parentRevisionId ? revisionsById.get(revision.parentRevisionId) : undefined;
+    if (parent && parent.conclusionId !== revision.conclusionId) graphIssue(ctx, ["candidateRevisions", index, "parentRevisionId"], "CandidateRevision parent belongs to another Conclusion");
+    const seen = new Set<string>();
+    let cursor: CandidateRevision | undefined = revision;
+    while (cursor) {
+      if (seen.has(cursor.id)) {
+        graphIssue(ctx, ["candidateRevisions", index, "parentRevisionId"], "CandidateRevision parent chain contains a cycle");
+        break;
+      }
+      seen.add(cursor.id);
+      cursor = cursor.parentRevisionId ? revisionsById.get(cursor.parentRevisionId) : undefined;
+    }
   });
   for (const conclusion of run.conclusions) {
     if (run.candidateRevisions.filter((revision) => revision.conclusionId === conclusion.id && revision.isCurrent).length !== 1) graphIssue(ctx, ["candidateRevisions"], `Conclusion ${conclusion.id} must have exactly one current revision`);
@@ -980,6 +1018,8 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
   run.humanDecisions.forEach((decision, index) => {
     if (!conclusionIds.has(decision.conclusionId)) graphIssue(ctx, ["humanDecisions", index, "conclusionId"], "HumanDecision points to unknown Conclusion");
     if (!revisionIds.has(decision.candidateRevisionId)) graphIssue(ctx, ["humanDecisions", index, "candidateRevisionId"], "HumanDecision points to unknown CandidateRevision");
+    const revision = revisionsById.get(decision.candidateRevisionId);
+    if (revision && revision.conclusionId !== decision.conclusionId) graphIssue(ctx, ["humanDecisions", index, "candidateRevisionId"], "HumanDecision revision belongs to another Conclusion");
   });
   run.artifactVersions.forEach((version, index) => {
     for (const id of version.artifactIds) if (!artifactIds.has(id)) graphIssue(ctx, ["artifactVersions", index, "artifactIds"], `ArtifactVersion points to unknown Artifact ${id}`);

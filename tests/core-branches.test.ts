@@ -178,11 +178,11 @@ test("question fit keeps late terms and live synthesis pre-tags conflicting link
   assert.equal(liveConflict.conclusions[0]?.evidenceStatus, "CONFLICT");
 });
 
-test("source update reports incomplete golden dependency chains as an inapplicable client request", async () => {
+test("source update rejects incomplete golden dependency graphs before mutation", async () => {
   const run = await golden();
   const inapplicable = (error: unknown) => error instanceof DomainError
     && error.statusCode === 422
-    && error.code === "SOURCE_UPDATE_NOT_APPLICABLE";
+    && error.code === "SOURCE_UPDATE_GRAPH_INVALID";
   const missingSource = structuredClone(run);
   missingSource.sources = missingSource.sources.filter((item) => item.id !== "source-market-csv");
   await assert.rejects(applySourceUpdate(missingSource, { fixtureDir: resolve("fixtures/golden"), workspaceDir: await mkdtemp(join(tmpdir(), "insightforge-update-missing-source-")) }), inapplicable);

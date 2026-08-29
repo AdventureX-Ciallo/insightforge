@@ -9,7 +9,7 @@
 | #42 Windows autocrlf 破坏 fixtures | 已关闭 | commit `8ac4e49`；`.gitattributes`、真实 autocrlf clone、source ZIP 摘要复算、159/159、fuzz、E2E |
 | #43 推理模型耗尽 max_tokens | 已通过本地终审，待提交并关闭 | StepFun 真实 RED/GREEN、163/163、八套 fuzz 694,100、E2E |
 | #44 200 截断/空 JSON 不重试 | 待处理 | — |
-| #45 实时运行 source-update 写死 ID | 待复核已有修复 | — |
+| #45 实时运行 source-update 写死 ID | 已验证修复：动态依赖图、唯一根/Datum、版本与修订链 schema 锁、无副作用 422/幂等 409 | 本轮回归 + 84 例 seeded fuzz |
 | #46 rejectedDrafts 不落盘 | 待处理 | — |
 | #47 STALE 无复核恢复路径 | 待处理 | — |
 | #48 settings.json 明文 API Key | 待处理 | — |

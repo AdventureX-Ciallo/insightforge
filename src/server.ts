@@ -380,7 +380,7 @@ export function uploadFileName(request: IncomingMessage) {
 
 export function publicHttpError(error: unknown) {
   if (error instanceof RequestError) return { status: error.status, message: error.message };
-  if (error instanceof DomainError) return { status: error.statusCode, message: error.message };
+  if (error instanceof DomainError) return { status: error.statusCode, message: error.message, code: error.code };
   if (error instanceof UploadValidationError || error instanceof UploadStoreError) {
     return { status: error.statusCode, message: error.message };
   }
@@ -1001,7 +1001,10 @@ export function createInsightForgeServer(options: ServerOptions) {
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
       const publicError = publicHttpError(error);
-      sendJson(response, publicError.status, { error: publicError.message });
+      sendJson(response, publicError.status, {
+        error: publicError.message,
+        ...("code" in publicError ? { code: publicError.code } : {}),
+      });
     }
   }
 

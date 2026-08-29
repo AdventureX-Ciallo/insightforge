@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { isMainModule } from "../src/main-module.js";
+import { DomainError } from "../src/domain-error.js";
 import {
   assertRuntimeAssets,
   contentType,
@@ -120,6 +121,7 @@ test("request readers reject malformed, non-object, oversized, empty, and unsafe
     "application/octet-stream",
   ]);
   assert.deepEqual(publicHttpError("secret internal error"), { status: 500, message: "Request failed" });
+  assert.deepEqual(publicHttpError(new DomainError(422, "SOURCE_UPDATE_GRAPH_INVALID", "graph rejected")), { status: 422, message: "graph rejected", code: "SOURCE_UPDATE_GRAPH_INVALID" });
 
   const publicDir = resolve("public");
   assert.equal(staticFilePath(publicDir, "/"), join(publicDir, "index.html"));
@@ -337,7 +339,9 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
     assert.equal(firstUpdate.status, 200);
     const repeatedUpdate = await fetch(`${baseUrl}/api/runs/${runId}/source-update`, { method: "POST" });
     assert.equal(repeatedUpdate.status, 409);
-    assert.match((await repeatedUpdate.json() as { error: string }).error, /来源已在 v2/u);
+    const repeatedUpdateBody = await repeatedUpdate.json() as { error: string; code: string };
+    assert.match(repeatedUpdateBody.error, /来源已在 v2/u);
+    assert.equal(repeatedUpdateBody.code, "SOURCE_ALREADY_V2");
     assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/decisions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conclusionId: "conclusion-penetration", action: "CONFIRM", reason: "已说明口径", scopeNote: "仅限当前范围" }) })).status, 409);
 
     const mismatchCreated = await fetch(`${baseUrl}/api/runs`, {
@@ -349,7 +353,9 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
     await waitForRun(baseUrl, mismatchRunId);
     const mismatchedUpdate = await fetch(`${baseUrl}/api/runs/${mismatchRunId}/source-update`, { method: "POST" });
     assert.equal(mismatchedUpdate.status, 422);
-    assert.equal((await mismatchedUpdate.json() as { error: string }).error, "来源更新仅适用于内置黄金案例的 v1→v2 演示");
+    const mismatchedUpdateBody = await mismatchedUpdate.json() as { error: string; code: string };
+    assert.equal(mismatchedUpdateBody.error, "来源更新仅适用于内置黄金案例的 v1→v2 演示");
+    assert.equal(mismatchedUpdateBody.code, "SOURCE_UPDATE_NOT_APPLICABLE");
 
     for (const file of ["/", "/styles.css", "/app.js"]) assert.equal((await fetch(`${baseUrl}${file}`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/missing.css`)).status, 404);

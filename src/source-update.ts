@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { persistRun, writeArtifactVersion } from "./artifacts.js";
-import { researchRunSchema, type ResearchRun } from "./domain.js";
+import { computeResearchSnapshotId, researchRunSchema, type ResearchRun } from "./domain.js";
 import { DomainError } from "./domain-error.js";
 import { hashFile, hashValue } from "./hash.js";
 import { GOLDEN_RESEARCH_QUESTION } from "./model-cache.js";
@@ -19,24 +19,51 @@ function notApplicable() {
   return new DomainError(422, "SOURCE_UPDATE_NOT_APPLICABLE", "来源更新仅适用于内置黄金案例的 v1→v2 演示");
 }
 
+function invalidGraph() {
+  return new DomainError(422, "SOURCE_UPDATE_GRAPH_INVALID", "来源更新所需依赖图无效，已 fail-closed 且未生成新成果");
+}
+
+function nextAvailableId(prefix: string, existingIds: ReadonlySet<string>) {
+  let candidate = prefix;
+  for (let suffix = 1; existingIds.has(candidate); suffix += 1) candidate = `${prefix}-${suffix}`;
+  return candidate;
+}
+
+function validateCandidateBeforeArtifacts(run: ResearchRun) {
+  const candidate = structuredClone(run);
+  candidate.artifacts = [];
+  candidate.artifactHistory = [];
+  candidate.artifactVersions = [];
+  candidate.researchSnapshotId = computeResearchSnapshotId(candidate);
+  // This is a defensive internal invariant: validated input plus the deterministic
+  // transformation below must always produce a schema-valid pre-artifact graph.
+  /* c8 ignore next */
+  if (!researchRunSchema.safeParse(candidate).success) throw invalidGraph();
+}
+
 /** 内置确定性 v1→v2：保留旧 SourceVersion/ArtifactVersion，只让依赖链上的对象失效。 */
 export async function applySourceUpdate(current: ResearchRun, options: SourceUpdateOptions): Promise<ResearchRun> {
-  if (current.sourceVersion !== "v1") {
+  const validated = researchRunSchema.safeParse(current);
+  if (!validated.success) throw invalidGraph();
+  if (validated.data.sourceVersion !== "v1") {
     throw new DomainError(409, "SOURCE_ALREADY_V2", "来源已在 v2；同一任务的 v1→v2 更新只能执行一次");
   }
-  if (current.researchQuestion !== GOLDEN_RESEARCH_QUESTION) throw notApplicable();
-  const run = structuredClone(current);
-  const source = run.sources.find((item) => item.version === "v1" && item.locator.fileName === "market_v1.csv");
+  if (validated.data.researchQuestion !== GOLDEN_RESEARCH_QUESTION) throw notApplicable();
+  const run = structuredClone(validated.data);
+  const sources = run.sources.filter((item) => item.version === "v1" && item.locator.fileName === "market_v1.csv");
+  if (sources.length > 1) throw invalidGraph();
+  const source = sources[0];
   if (!source) throw notApplicable();
   const linkedEvidence = run.evidence.filter((item) => item.sourceId === source.id);
   const linkedEvidenceIds = new Set(linkedEvidence.map((item) => item.id));
-  const penetrationDatum = run.data.find((item) => linkedEvidenceIds.has(item.evidenceId)
+  const penetrationData = run.data.filter((item) => linkedEvidenceIds.has(item.evidenceId)
     && item.formula === "nev_sales_million / total_auto_sales_million * 100"
     && item.period === "2024");
-  const oldVersion = run.sourceVersions.find((item) => item.id === source.sourceVersionId);
+  if (penetrationData.length > 1) throw invalidGraph();
+  const penetrationDatum = penetrationData[0];
+  const oldVersion = run.sourceVersions.find((item) => item.id === source.sourceVersionId)!;
   if (linkedEvidence.length === 0) throw notApplicable();
   if (!penetrationDatum) throw notApplicable();
-  if (!oldVersion) throw notApplicable();
 
   const dataById = new Map(run.data.map((item) => [item.id, item]));
   const affectedClaims = run.claims.filter((claim) => {
@@ -54,9 +81,9 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
   const affectedConclusions = run.conclusions.filter((item) => item.claimIds.some((id) => affectedClaimIds.has(id)));
   const previousRevisions = new Map(affectedConclusions.map((conclusion) => [
     conclusion.id,
-    run.candidateRevisions.find((item) => item.id === conclusion.currentRevisionId),
+    run.candidateRevisions.find((item) => item.id === conclusion.currentRevisionId)!,
   ]));
-  if (affectedClaims.length === 0 || affectedConclusions.length === 0 || [...previousRevisions.values()].some((item) => !item)) throw notApplicable();
+  if (affectedClaims.length === 0 || affectedConclusions.length === 0) throw notApplicable();
 
   const csvPath = resolve(options.fixtureDir, "market_v2.csv");
   const csvText = await readFile(csvPath, "utf8");
@@ -66,7 +93,7 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
   const now = new Date().toISOString();
   const updateId = `source-update-${randomUUID()}`;
   oldVersion.isCurrent = false;
-  const v2VersionId = "source-version-market-csv-v2";
+  const v2VersionId = nextAvailableId(`source-version-${source.id}-v2`, new Set(run.sourceVersions.map((item) => item.id)));
   run.sourceVersions.push({
     id: v2VersionId,
     sourceId: source.id,
@@ -75,7 +102,7 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
     sha256: await hashFile(csvPath),
     locator: { url: "https://app.www.gov.cn/govdata/gov/202501/14/523622/article.html", fileName: "market_v2.csv", columns: ["nev_sales_million", "total_auto_sales_million", "public_chargers_million"], rows: [2, 3] },
     knowledgeType: "FACT",
-    upstreamSourceIds: ["source-web-association", "source-web-charging"],
+    upstreamSourceIds: [...oldVersion.upstreamSourceIds],
     isCurrent: true,
   });
   source.version = "v2";
@@ -103,10 +130,13 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
 
   const sourceSnapshotId = hashValue(run.sourceVersions.filter((item) => item.isCurrent));
   const revisionIds: string[] = [];
+  const usedRevisionIds = new Set(run.candidateRevisions.map((item) => item.id));
+  const usedDecisionIds = new Set(run.humanDecisions.map((item) => item.id));
   for (const conclusion of affectedConclusions) {
     const previousRevision = previousRevisions.get(conclusion.id)!;
-    previousRevision!.isCurrent = false;
-    const revisionId = `revision-source-update-${randomUUID()}`;
+    previousRevision.isCurrent = false;
+    const revisionId = nextAvailableId(`revision-${updateId}-${conclusion.id}`, usedRevisionIds);
+    usedRevisionIds.add(revisionId);
     revisionIds.push(revisionId);
     const previousConclusionText = conclusion.text;
     conclusion.text = `来源已更新：2024 全汽车销量份额由 v1 的 ${previousPenetration.toFixed(1)}% 变为 v2 的 ${metrics.penetration.toFixed(1)}%；旧候选判断和人工确认均已失效，需结合原证据路径重新审查。`;
@@ -122,7 +152,7 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
     run.candidateRevisions.push({
       id: revisionId,
       conclusionId: conclusion.id,
-      parentRevisionId: previousRevision!.id,
+      parentRevisionId: previousRevision.id,
       authorType: "SYSTEM",
       originType: "DETERMINISTIC",
       text: conclusion.text,
@@ -142,7 +172,7 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
     }
     if (invalidated.length > 0) {
       run.humanDecisions.push({
-        id: randomUUID(),
+        id: nextAvailableId(`decision-${updateId}-${conclusion.id}`, usedDecisionIds),
         conclusionId: conclusion.id,
         action: "REVOKE_ON_SOURCE_UPDATE",
         decidedAt: now,
@@ -171,7 +201,8 @@ export async function applySourceUpdate(current: ResearchRun, options: SourceUpd
     ...affectedConclusions.map((item) => item.id),
     ...revisionIds,
   ])];
-  applySourceConfidence(run.sources, run.conclusions);
+  applySourceConfidence(run.sources, affectedConclusions);
+  validateCandidateBeforeArtifacts(run);
   await writeArtifactVersion(run, options.workspaceDir, "SOURCE_UPDATE", {
     triggerRef: updateId,
     adjustmentNote: `来源 ${source.id} 从 v1 更新到 v2；依赖对象已重算，既有确认按依赖关系撤销`,
