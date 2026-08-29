@@ -39,7 +39,7 @@
 | #36 | 删除机器路径绑定的已提交 coverage 快照，忽略 `coverage-detail/`，门禁每次从当前源码重算四项 100%。 | `.gitignore`、`scripts/clean.mjs`；`gate-scripts.test.ts`、`npm run coverage` |
 | #37 | `verify` 串行包含确定性 fuzz；失败时 aggregate gate 失败。 | `package.json`；`gate-scripts.test.ts` |
 | #38 | `tsconfig.tests.json` 严格检查 unit、fuzz 与 E2E 源码，并被 `typecheck`/`verify` 强制执行。 | `tsconfig.tests.json`、`package.json`；`gate-scripts.test.ts` |
-| #39 | 57 个 Minor 子项全部逐条处理；详见下节。 | 跨模块回归、158/158 Node 测试、E2E、contract、fuzz |
+| #39 | 57 个 Minor 子项全部逐条处理；详见下节。 | 跨模块回归、159/159 Node 测试、E2E、contract、fuzz |
 | #40 | 明确采用“含未知 evidence ID 的候选整条丢弃；独立候选继续；有效少于 3 条时 SYNTHESIZE 整体失败”；认证静态缓存更严格，任一未知引用使缓存失败。 | `src/llm.ts`、`src/model-cache.ts`、相关架构文档；`llm-synth.test.ts`、`llm-branches.test.ts`、`model-cache.test.ts` |
 | #41 | 测试文件由 Node API排序枚举，不依赖 shell glob；项目 engines 与实际 `c8` 依赖要求统一为 `^20.19.0 || ^22.12.0 || >=23`。 | `scripts/test-command.mjs`、`package.json`/lock；`gate-scripts.test.ts` |
 
@@ -130,8 +130,8 @@
 
 ## 当前独立验收
 
-- `npm run verify`：158/158；`src/**` statements/branches/functions/lines 四项 100%；build；172 文件 secret scan；contract 23/23；seed `520628262` fuzz 685,000 例（6,840 行，100.15 例/行）。
-- `npm run test:e2e`：1/1，4.7 s；真实 Chromium 与五页 PPTX 下载解析通过。
+- `npm run verify`：159/159；`src/**` statements/branches/functions/lines 四项 100%；build；173 文件 secret scan；contract 23/23；seed `520628262` fuzz 685,000 例（6,840 行，100.15 例/行）。
+- `npm run test:e2e`：1/1，5.9 s；真实 Chromium 与五页 PPTX 下载解析通过。
 - `npm run demo:triple`：3/3，88/20/16 ms；`npm run smoke` PASS。
 - `npm ls --all` PASS；`npm audit --audit-level=low` 为 0 vulnerabilities。
 - 当前 Node `v22.17.0` 属声明支持范围。当前机器没有 Node 20.19+ 二进制，外部 npm/Docker 取包又被网络阻断，因此没有伪称已在真实 Node 20 主机执行；#41 的 shell 独立性由源码枚举、静态门禁与当前 Node 运行证明，最终干净包仍应在受支持 Node 20.19+ 环境补跑。

@@ -1,0 +1,2 @@
+# Golden caches and their source fixtures are authenticated as exact bytes.
+fixtures/** -text

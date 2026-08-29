@@ -14,15 +14,15 @@
 2026-08-28 在当前工作树执行的最新门禁：
 
 ```text
-npm run verify                 PASS; 158/158; four coverage metrics 100%; build; 172-file secret scan; contract 23/23; fuzz 685,000
-npm run test:e2e               PASS; 1/1 Chromium; 4.7 s; downloaded five-page PPTX parsed
+npm run verify                 PASS; 159/159; four coverage metrics 100%; build; 173-file secret scan; contract 23/23; fuzz 685,000
+npm run test:e2e               PASS; 1/1 Chromium; 5.9 s; downloaded five-page PPTX parsed
 npm run demo:triple            PASS; 3/3; 88/20/16 ms
 npm run smoke                  PASS
 npm ls --all                   PASS
 npm audit --audit-level=low    PASS; 0 vulnerabilities
 ```
 
-加入本审计文档后已重跑完整 `npm run verify`；当前 172 个 tracked/untracked 且未忽略的文件在 aggregate gate 内通过密钥扫描。
+加入本审计文档后已重跑完整 `npm run verify`；当前 173 个 tracked/untracked 且未忽略的文件在 aggregate gate 内通过密钥扫描。
 
 收口前旧源码包曾在无 `.git`、无依赖、无构建和无运行状态的全新解包目录通过当时的 36/36 门禁；该记录只证明旧包，不证明当前工作树。当前实现按所有者要求尚未重新打包，最终源码包必须在前端冻结后生成并在两个全新解包目录重跑；SHA-256 和基线应保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。详细结果见 `docs/TEST-RESULTS.md`。
 

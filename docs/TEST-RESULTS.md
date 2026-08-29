@@ -6,16 +6,16 @@
 
 | 命令 | 结果 |
 |---|---|
-| `npm test` | PASS：158/158 |
+| `npm test` | PASS：159/159 |
 | `npm run coverage` | PASS：`src/**` 语句/分支/函数/行均 100% |
 | `npm run verify` | PASS：生产源码及 unit/fuzz/E2E 测试源码严格类型检查、当前源码四项 100% 覆盖率门禁、生产构建、密钥扫描、23/23 契约自检、确定性 fuzz；不使用已提交的机器路径 coverage 快照替代本轮输出 |
 | `npm run fuzz` | PASS：seed `520628262`，七套累计 685,000 例；6,840 行源码对应 100.15 例/行；结构套件含输出链、状态轴与至少 6,000 次完整图单边变质，人工决定套件覆盖终态幂等性与 EDIT 重开，Audit 套件校验纯变换，SSRF 套件含 DNS 回退危险答案停止链不变量 |
 | `npm run fuzz:report` | PASS：同 seed 685,000 例，26.082 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
 | `npm test -- --test-name-pattern SSE` | PASS：SSE 的真实 ReadableStream、心跳、终态关流、断开清理、写入竞态与跨 run 隔离；命令由跨平台 Node runner 枚举测试文件 |
-| `npm run test:e2e` | PASS：1/1；真实 Chromium 完成黄金任务、审阅、来源更新和成果检查，并解析下载的 5 页 PPTX 及画布对象，测试体 2.2 s、命令总耗时 4.7 s；等待真实写响应，避免假阳性 |
+| `npm run test:e2e` | PASS：1/1；真实 Chromium 完成黄金任务、审阅、来源更新和成果检查，并解析下载的 5 页 PPTX 及画布对象，测试体 2.3 s、命令总耗时 5.9 s；等待真实写响应，避免假阳性 |
 | `npm run demo:triple` | PASS：3/3；88/20/16 ms，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
 | `npm run smoke` | PASS：生产构建服务、健康页与产品页 |
-| `npm run secret-scan` | PASS：172 个 tracked/untracked 且未被忽略的文件，无凭据文件或常见 token 形状 |
+| `npm run secret-scan` | PASS：173 个 tracked/untracked 且未被忽略的文件，无凭据文件或常见 token 形状 |
 | `npm run package:source -- /tmp/InsightForge-source-0828.zip` | 当前工作树未执行：按所有者要求推迟到前端冻结；收口前旧包及 manifest 的 PASS 仅列于下节历史预检 |
 | `npm audit --audit-level=low` | PASS：0 vulnerabilities |
 
@@ -32,7 +32,7 @@ npm run smoke                  PASS
 npm audit --audit-level=high   PASS; 0 vulnerabilities
 ```
 
-以上 36/36 是扩展到当前 158 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。SHA-256 前缀 `30601c95` 的已验 ZIP 是本轮收口前基线，本节新增改动尚未重新打包，不能把旧哈希说成当前工作树哈希。
+以上 36/36 是扩展到当前 159 条测试前的历史预检记录，不替代本轮门禁。最新 ZIP 的名称、大小、SHA-256、基线 commit 与状态摘要保存在 ZIP 旁的 `.manifest.json`；最终报告只引用实际生成后的值。SHA-256 前缀 `30601c95` 的已验 ZIP 是本轮收口前基线，本节新增改动尚未重新打包，不能把旧哈希说成当前工作树哈希。
 
 ## 关键反证
 
@@ -169,4 +169,4 @@ Windows 桌面 Microsoft PowerPoint 当前不可用，因此 Windows 专项打�
 
 随后分别只启用宿主机 DNS 与固定 `1.1.1.1:53` 适配器做同一主机解析。两次都收到 `198.18.0.0/15` fake-IP 代理保留段，产品原样返回“本机 DNS 返回 fake-IP 代理保留段，实时搜索需直连网络或调整代理模式，已 fail-closed 未发出请求”。这证明当前环境中两个适配器确实被调用且危险结果没有触发后续 fetch；它不证明这两个网络路径能在当前代理环境获得真实公网答案。
 
-自动化证据：`tests/dns-fallback.test.ts` 覆盖 DoH → system → UDP/53 顺序、三个独立 `0/1` 开关、全部关闭、失败回退、危险答案立即阻断、固定 DoH/UDP 目标、响应大小与格式边界及 `dnsResolution` 留痕；当前全量 `npm test` 为 158/158，`npm run coverage` 四项 100%。
+自动化证据：`tests/dns-fallback.test.ts` 覆盖 DoH → system → UDP/53 顺序、三个独立 `0/1` 开关、全部关闭、失败回退、危险答案立即阻断、固定 DoH/UDP 目标、响应大小与格式边界及 `dnsResolution` 留痕；当前全量 `npm test` 为 159/159，`npm run coverage` 四项 100%。
