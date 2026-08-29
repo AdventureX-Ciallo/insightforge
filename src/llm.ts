@@ -312,26 +312,42 @@ function parsePlanDrafts(parsed: unknown, sensitiveValues: readonly string[] = [
   });
 }
 
+function abortableDelay(milliseconds: number, signal?: AbortSignal) {
+  return new Promise<void>((resolveDelay, rejectDelay) => {
+    const abort = () => {
+      clearTimeout(timer);
+      rejectDelay(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolveDelay();
+    }, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 /**
  * 同一模型、同一请求的有界重试（总共最多 2 次）：覆盖连接被远端切断
  * （fetch reject，如 terminated/reset）、429/5xx，以及 HTTP 200 中空白或损坏的
  * message.content；4xx 鉴权类错误立即抛出。
  * 这不是模型 fallback——不换端点、不换模型、不降级。
  */
-async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (value: unknown) => T, timeoutMs: number, retryDelayMs: number): Promise<T> {
+async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (value: unknown) => T, timeoutMs: number, retryDelayMs: number, signal?: AbortSignal): Promise<T> {
   let lastError = new Error("LLM request failed after bounded retry");
   const base = config.baseUrl.replace(/\/+$/u, "");
   const endpoint = base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
   const headers = { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` };
   const serializedBody = JSON.stringify(body);
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    signal?.throwIfAborted();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(endpoint, {
         method: "POST",
         headers,
-        signal: controller.signal,
+        redirect: "error",
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
         body: serializedBody,
       });
       if (response.ok) {
@@ -351,6 +367,7 @@ async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (v
       if (response.status < 500 && response.status !== 429) throw new NonRetryableLlmError(error.message);
       lastError = error;
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       if (error instanceof NonRetryableLlmError) throw error;
       if (error instanceof RetryableLlmOutputError) {
         lastError = error;
@@ -366,7 +383,7 @@ async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (v
     } finally {
       clearTimeout(timer);
     }
-    if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    if (attempt === 1) await abortableDelay(retryDelayMs, signal);
   }
   throw lastError;
 }
@@ -375,7 +392,7 @@ async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (v
  * 调用 OpenAI 兼容接口生成候选判断草稿。本函数不做可信校验——草稿必须经过
  * validateLlmDrafts 过滤（引用白名单、条数、文本长度）后才能进入证据链。
  */
-export async function draftConclusions(config: LlmConfig, context: LlmSynthesisContext, timeoutMs = 90_000, retryDelayMs = 1500): Promise<LlmDraft[]> {
+export async function draftConclusions(config: LlmConfig, context: LlmSynthesisContext, timeoutMs = 90_000, retryDelayMs = 1500, signal?: AbortSignal): Promise<LlmDraft[]> {
   return postChatCompletion(config, {
     model: config.model,
     temperature: 0.2,
@@ -383,7 +400,7 @@ export async function draftConclusions(config: LlmConfig, context: LlmSynthesisC
     max_tokens: effectiveTokenBudget(config.synthesisMaxTokens, SYNTHESIS_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderConclusionMessages(context),
-  }, (value) => parseConclusionDrafts(value, [config.apiKey]), timeoutMs, retryDelayMs);
+  }, (value) => parseConclusionDrafts(value, [config.apiKey]), timeoutMs, retryDelayMs, signal);
 }
 
 /**
@@ -449,7 +466,7 @@ export function validateLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[]
  * 模型提出（PLAN）：调用同一 OpenAI 兼容端点生成研究计划草稿。
  * 与 draftConclusions 一样不做可信校验——必须经 validatePlanSteps 裁决。
  */
-export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext, timeoutMs = 90_000, retryDelayMs = 1500): Promise<PlanStepDraft[]> {
+export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext, timeoutMs = 90_000, retryDelayMs = 1500, signal?: AbortSignal): Promise<PlanStepDraft[]> {
   return postChatCompletion(config, {
     model: config.model,
     temperature: 0.2,
@@ -457,7 +474,7 @@ export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext,
     max_tokens: effectiveTokenBudget(config.planMaxTokens, PLAN_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderPlanMessages(context),
-  }, (value) => parsePlanDrafts(value, [config.apiKey]), timeoutMs, retryDelayMs);
+  }, (value) => parsePlanDrafts(value, [config.apiKey]), timeoutMs, retryDelayMs, signal);
 }
 
 /**

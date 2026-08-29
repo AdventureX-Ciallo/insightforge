@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readResponseBytesLimited } from "./limited-response.js";
+import { validatePublicHttpUrlWithTrace, type SearchResolver } from "./search-engines.js";
 
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const AUTHORITY_SOURCES = [
@@ -27,10 +28,12 @@ const AUTHORITY_SOURCES = [
 
 export type AuthorityFetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
-export async function checkLiveSources(fetcher: AuthorityFetcher = fetch) {
+export async function checkLiveSources(fetcher: AuthorityFetcher = fetch, resolver?: SearchResolver) {
   const checkedAt = new Date().toISOString();
   const results = await Promise.all(AUTHORITY_SOURCES.map(async (source) => {
     try {
+      const hostname = new URL(source.url).hostname;
+      await validatePublicHttpUrlWithTrace(source.url, [hostname], resolver);
       // redirect:"error" 在建立任何中间连接之前 fail-closed：undici 的 "follow" 会先对每个
       // 重定向目标建立真实 TCP/TLS 连接，事后校验 response.url 属于盲 SSRF（#1）。
       const response = await fetcher(source.url, {

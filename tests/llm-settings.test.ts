@@ -8,11 +8,12 @@ import JSZip from "jszip";
 
 import type { ModelProvenance } from "../src/domain.js";
 import { createInsightForgeServer } from "../src/server.js";
+import { fetchForPoll } from "./http-poll.js";
 
 async function waitForRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as {
       job: { status: string };
       run?: {
@@ -83,7 +84,7 @@ test("LLM settings are masked, persisted 0600, preferred over env, and used by t
     return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200, headers: { "content-type": "application/json" } });
   };
 
-  const app = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 0 });
+  const app = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 0, llmResolver: async () => [{ address: "93.184.216.34", family: 4 }] });
   const baseUrl = await app.start(0, "127.0.0.1");
   try {
     const initial = await fetch(`${baseUrl}/api/settings/llm`);
@@ -202,7 +203,7 @@ test("LLM settings are masked, persisted 0600, preferred over env, and used by t
     assert.equal(updated.artifactVersions.at(-1)?.status, "CURRENT");
 
     await app.stop();
-    const restarted = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 0 });
+    const restarted = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 0, llmResolver: async () => [{ address: "93.184.216.34", family: 4 }] });
     const restartedBaseUrl = await restarted.start(0, "127.0.0.1");
     try {
       const recoveredResponse = await fetch(`${restartedBaseUrl}/api/runs/${runId}`);

@@ -6,18 +6,20 @@
 
 | 命令 | 结果 |
 |---|---|
-| `npm test` | PASS：188/188 |
+| `npm run coverage` 内全量 Node 测试 | PASS：197 个顶层测试、203/203 断言；`src/**` 语句/分支/函数/行均 100% |
 | `npm run coverage` | PASS：`src/**` 语句/分支/函数/行均 100% |
-| `npm run verify` | PASS：生产源码、Node/fuzz/E2E 与 React 工作台严格类型检查、当前源码四项 100% 覆盖率门禁、React+后端生产构建、密钥扫描、24/24 契约自检、确定性 fuzz；不使用已提交的机器路径 coverage 快照替代本轮输出 |
-| `npm run fuzz` | PASS：seed `520628262`，十一套累计 737,500 例；7,365 行源码对应 100.14 例/行；结构套件含输出链、状态轴与完整图单边变质，人工决定套件覆盖终态幂等性与 EDIT 重开，LLM 套件覆盖推理预算、有界重试与拒绝候选留痕，来源更新套件覆盖动态依赖图，Audit 套件校验纯变换，SSRF 套件含 DNS 回退危险答案停止链不变量 |
-| `npm run fuzz:report` | PASS：同 seed 737,500 例，81.332 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
+| `npm run verify` 各组成门禁 | PASS：本轮最终代码分别通过生产构建/严格类型检查、四项 100% 覆盖率、密钥扫描、25/25 契约自检和确定性 fuzz；这些组成门禁是在最终改动后独立重跑，不把此前失败的 aggregate 进程伪装成一次新的 aggregate PASS |
+| `npm run fuzz` | PASS：seed `520628262`，十一套累计 770,000 例；7,690 行源码对应 100.13 例/行；结构套件含输出链、状态轴与完整图单边变质，人工决定套件覆盖终态幂等性与 EDIT 重开，LLM 套件覆盖推理预算、有界重试与拒绝候选留痕，来源更新套件覆盖动态依赖图，Audit 套件校验纯变换，SSRF 套件含 DNS 回退危险答案停止链不变量 |
+| `npm run fuzz:report` | PASS：同 seed 770,000 例，110.304 s；JSON 写入 `.insightforge/fuzz-report.json`（0600） |
 | `npm test -- --test-name-pattern SSE` | PASS：SSE 的真实 ReadableStream、心跳、终态关流、断开清理、写入竞态与跨 run 隔离；命令由跨平台 Node runner 枚举测试文件 |
-| `npm run test:e2e` | PASS：1/1；真实 Chromium 在 React 工作台完成选题、上传三方 SHA、SSE 五状态、证据下钻、人工驳回、来源更新和四成果检查，并解析下载的 5 页 PPTX；最新测试体 14.5 s、命令总耗时 23.1 s |
-| `npm run demo:triple` | PASS：3/3；88/20/16 ms，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
-| `npm run smoke` | PASS：生产构建服务、健康页与产品页 |
-| `npm run secret-scan` | PASS：219 个 tracked/untracked 且未被忽略的文件，无凭据文件或常见 token 形状 |
+| `npm run test:e2e` | PASS：6/6，52.9 s；真实 Chromium 覆盖完整研究/更新/交付闭环、选定 Google 合同、模型状态脱敏、上传三方 SHA 与拒绝完整性、刷新恢复后台运行，以及 settings 500 不被误标为未配置 |
+| `npm run demo:triple` | PASS：3/3；约 1.97/1.70/1.62 s，均完成五状态、6 个工具事件、4 条候选、1 次 Repair 与四格式交付 |
+| `npm run smoke` | PASS：从非项目当前目录启动生产构建服务并验证健康页与产品页 |
+| 生产进程 SIGTERM | PASS：`PORT=0` 启动后收到 SIGTERM，输出优雅停机消息并以退出码 0 结束 |
+| `npm run contract:check` | PASS：25/25；JSON 报告写入 `.insightforge/contract-check-report.json` |
+| `npm run secret-scan` | PASS：清理构建/运行产物后的源码树共扫描 222 个 tracked/untracked 且未被忽略的文件，无凭据文件或常见 token 形状；构建产物存在时的扩大扫描也曾覆盖 1,446 个文件并通过 |
 | `npm run package:source -- /tmp/InsightForge-source-0828.zip` | 当前工作树未执行：按所有者要求推迟到前端冻结；收口前旧包及 manifest 的 PASS 仅列于下节历史预检 |
-| `npm audit --audit-level=low` | PASS：0 vulnerabilities |
+| `npm audit --audit-level=high` | PASS：0 vulnerabilities；首轮审计端点 `socket hang up`，重试成功后才记录该结论 |
 
 ## 此前干净源码包预检
 
@@ -58,7 +60,7 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 | Path 5 交付 | 人工动作后重读 V1，并请求 V999 | V1 内容快照不变（仅 CURRENT→SUPERSEDED）；V999 返回 404 |
 | Path 6 更新 | DNS 预检同时返回公网与环回地址 | 搜索在 fetch 前拒绝，fetch 调用数为 0；不据此声称消除再次解析的 TOCTOU |
 
-物理行统计口径为 `src/**/*.ts`、`tests/**/*.ts` 与 `e2e/**/*.ts` 的 `wc -l`：生产 7,365 行，Node/fuzz 测试 8,360 行，测试/生产为 1.135:1（113.5%）；计入 79 行 E2E 后为 8,439/7,365 = 1.146:1（114.6%）。这与“随机执行用例/生产源码行”100:1 是不同指标。
+物理行统计口径为 `src/**/*.ts`、`tests/**/*.ts` 与 `e2e/**/*.ts` 的 `wc -l`：生产 7,690 行，Node/fuzz 测试 8,880 行，测试/生产为 1.155:1（115.5%）；计入 216 行 E2E 后为 9,096/7,690 = 1.183:1（118.3%）。这与“随机执行用例/生产源码行”100:1 是不同指标。
 
 ## P4 SSE 与随机测试证据
 
@@ -67,18 +69,18 @@ npm audit --audit-level=high   PASS; 0 vulnerabilities
 
 | 随机套件 | 用例数 | 实测耗时 | 可证伪不变量摘要 |
 |---|---:|---:|---|
-| 引擎随机走查 | 30 | 8.043 s | 注入失败传播；终态三选一；步骤消费链不断 |
-| ResearchRun 结构模糊 | 296,386 | 22.553 s | 合法图通过；步骤输出链、状态轴与递归畸形/类型污染拒绝；完整图单边变质 fail-closed |
-| 人工决定幂等性 | 1,000 | 0.936 s | 终态重复与跨终态翻转拒绝；EDIT 显式重开审阅 |
-| LLM 推理预算 | 1,000 | 0.293 s | 默认值与随机合法覆盖直达请求；不可信上下文不能改变预算；超长候选与 PLAN 字段在持久化前拒绝 |
-| LLM 有界重试 | 10,000 | 10.608 s | 4xx 不重试；429/5xx/网络错误最多重试一次；最终错误分类不泄漏凭据 |
-| 拒绝候选留痕 | 30,000 | 6.703 s | 原因、上限、摘要与 Unicode 边界可复现，溢出不污染接受集合 |
-| 来源更新依赖图 | 84 | 24.135 s | 动态 ID、分支语义、失配/歧义图和选择性失效保持 fail-closed |
-| HTTP API 模糊 | 5,000 | 1.318 s | 随机方法/路径/长输入/编码/NUL 不返回 5xx；服务保持健康 |
-| 审计变质 | 104,000 | 4.203 s | 删引用降级；同期间异值冲突；数值/类型变化改变输出；输入 bundle 不被原地改写 |
-| 上传模糊 | 165,000 | 1.282 s | 白名单外与穿越拒绝；随机字节失败有类型；成功文件 0600 |
-| SSRF 预检随机 | 125,000 | 1.206 s | 保留段/环回/畸形目标全部拒绝；危险 DNS 答案停止回退链；fetch 调用数始终为 0 |
-| **合计** | **737,500** | **81.332 s** | **目标 736,500；达到 100.14 例/源码行** |
+| 引擎随机走查 | 30 | 10.952 s | 注入失败传播；终态三选一；步骤消费链不断 |
+| ResearchRun 结构模糊 | 328,886 | 33.021 s | 合法图通过；步骤输出链、状态轴与递归畸形/类型污染拒绝；完整图单边变质 fail-closed |
+| 人工决定幂等性 | 1,000 | 1.201 s | 终态重复与跨终态翻转拒绝；EDIT 显式重开审阅 |
+| LLM 推理预算 | 1,000 | 0.315 s | 默认值与随机合法覆盖直达请求；不可信上下文不能改变预算；超长候选与 PLAN 字段在持久化前拒绝 |
+| LLM 有界重试 | 10,000 | 12.415 s | 4xx 不重试；429/5xx/网络错误最多重试一次；最终错误分类不泄漏凭据 |
+| 拒绝候选留痕 | 30,000 | 8.512 s | 原因、上限、摘要与 Unicode 边界可复现，溢出不污染接受集合 |
+| 来源更新依赖图 | 84 | 32.644 s | 动态 ID、分支语义、失配/歧义图和选择性失效保持 fail-closed |
+| HTTP API 模糊 | 5,000 | 2.074 s | 随机方法/路径/长输入/编码/NUL 不返回 5xx；服务保持健康 |
+| 审计变质 | 104,000 | 5.578 s | 删引用降级；同期间异值冲突；数值/类型变化改变输出；输入 bundle 不被原地改写 |
+| 上传模糊 | 165,000 | 1.708 s | 白名单外与穿越拒绝；随机字节失败有类型；成功文件 0600 |
+| SSRF 预检随机 | 125,000 | 1.814 s | 保留段/环回/畸形目标全部拒绝；危险 DNS 答案停止回退链；fetch 调用数始终为 0 |
+| **合计** | **770,000** | **110.304 s** | **目标 769,000；达到 100.13 例/源码行** |
 
 ## PPTX 独立验收
 
@@ -173,4 +175,12 @@ React 工作台已把上传 ID 带入同一运行的 COLLECT，拆分编辑/确�
 
 随后分别只启用宿主机 DNS 与固定 `1.1.1.1:53` 适配器做同一主机解析。两次都收到 `198.18.0.0/15` fake-IP 代理保留段，产品原样返回“本机 DNS 返回 fake-IP 代理保留段，实时搜索需直连网络或调整代理模式，已 fail-closed 未发出请求”。这证明当前环境中两个适配器确实被调用且危险结果没有触发后续 fetch；它不证明这两个网络路径能在当前代理环境获得真实公网答案。
 
-自动化证据：`tests/dns-fallback.test.ts` 覆盖 DoH → system → UDP/53 顺序、三个独立 `0/1` 开关、全部关闭、失败回退、危险答案立即阻断、固定 DoH/UDP 目标、响应大小与格式边界及 `dnsResolution` 留痕；当前全量 `npm test` 为 163/163，`npm run coverage` 四项 100%。
+自动化证据：`tests/dns-fallback.test.ts` 覆盖 DoH → system → UDP/53 顺序、三个独立 `0/1` 开关、全部关闭、失败回退、危险答案立即阻断、固定 DoH/UDP 目标、响应大小与格式边界及 `dnsResolution` 留痕；当前全量覆盖率运行是 197 个顶层测试、203/203 断言，四项 100%。
+
+## 2026-08-29 三搜索引擎复测与在线模型边界
+
+同样直接调用产品函数 `searchSelectedEngine()`，使用默认 resolver、默认 `fetch` 和同一真实中文查询；没有注入响应或放宽 SSRF。三次均由固定 HTTPS DoH 返回公网地址并完成 HTTP 响应处理：Bing 6.775 s、0 条候选；Google 1.962 s、1 条候选；百度 0.684 s、0 条候选。三个调用的函数级 outcome 都是 success，但“HTTP 成功且解析为 0 条”不等于“获得有效信源”，所以本轮只能确认三引擎真实请求链可运行，并确认 Google 当前页面结构至少产生一条候选；Bing/百度解析有效性仍未关闭。
+
+同轮只检查环境变量存在性，`INSIGHTFORGE_LLM_API_KEY`、`INSIGHTFORGE_LLM_BASE_URL`、`INSIGHTFORGE_LLM_MODEL` 均为 absent；没有读取值、没有读取本地 settings 代替，也没有发起在线 LLM 请求。黄金模型缓存和历史在线模型证据均不冒充本轮在线成功。
+
+依赖审计首轮因 npm registry 审计端点 `socket hang up` 无法形成结论；同轮重试 `npm audit --audit-level=high` 成功并返回 `found 0 vulnerabilities`。生产服务以 `PORT=0` 启动后收到 SIGTERM，输出 `shutting down gracefully` 并以退出码 0 结束。

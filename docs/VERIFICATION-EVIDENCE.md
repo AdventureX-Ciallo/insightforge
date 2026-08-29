@@ -13,15 +13,15 @@
 2026-08-29 在当前工作树执行的最新门禁：
 
 ```text
-npm run verify                 PASS; 188/188; four coverage metrics 100%; React+backend build; secret scan; contract 24/24; fuzz 737,500
-npm run test:e2e               PASS; 1/1 Chromium; full React workbench path; 23.1 s; test body 14.5 s
-npm run demo:triple            PASS; 3/3; 88/20/16 ms
-npm run smoke                  PASS
-npm ls --all                   PASS
-npm audit --audit-level=low    PASS; 0 vulnerabilities
+verify components              PASS; 197 top-level tests / 203 assertions; four coverage metrics 100%; React+backend build; clean source-tree secret scan 222 files; contract 25/25; fuzz 770,000
+npm run test:e2e               PASS; 6/6 Chromium; full React/backend workbench contracts; 52.9 s
+npm run demo:triple            PASS; 3/3; every run below 2 s
+npm run smoke                  PASS; launched from a non-project cwd
+production SIGTERM             PASS; graceful message; exit code 0
+npm audit --audit-level=high   PASS after one registry retry; 0 vulnerabilities
 ```
 
-加入本审计文档后已重跑完整 `npm run verify`；当前 tracked/untracked 且未忽略的源码与文档在 aggregate gate 内通过密钥扫描。
+最终实现改动后已分别重跑 `npm run verify` 的全部组成门禁；不把此前中途失败的 aggregate 进程写成一次新的 aggregate PASS。当前源码通过构建/类型检查、203/203 断言与四项 100% 覆盖率、清理后 222 文件密钥扫描、25/25 契约以及 seed `520628262` 的 770,000 例 fuzz；构建产物存在时的扩大扫描也曾覆盖 1,446 个文件并通过。
 
 收口前旧源码包曾在无 `.git`、无依赖、无构建和无运行状态的全新解包目录通过当时的 36/36 门禁；该记录只证明旧包，不证明当前工作树。当前实现按所有者要求尚未重新打包，最终源码包必须在前端冻结后生成并在两个全新解包目录重跑；SHA-256 和基线应保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。详细结果见 `docs/TEST-RESULTS.md`。
 
@@ -35,6 +35,8 @@ npm audit --audit-level=low    PASS; 0 vulnerabilities
 - 已保存的真实在线模型输出及程序校验记录位于 `docs/verification/online-llm-output.json` 与 `online-llm-validation.json`；它证明一次真实模型→校验器调用，不代表仓库携带 API 凭据。
 
 ## 信源联网证据
+
+2026-08-29 直接调用当前产品函数并使用默认 resolver、默认 `fetch` 对 Bing、Google、百度各执行一次真实中文查询。三次 HTTP 路径均完成：Bing 0 条、Google 1 条、百度 0 条候选；三次 DNS 都由固定 HTTPS DoH 返回公网地址。0 条结果不等于有效信源成功，因此只确认三引擎请求链和 Google 当前解析路径，本轮仍不宣称 Bing/百度获得了可用候选。
 
 单一 MediaWiki 提供方实时搜索于 `2026-08-27T15:38:33.771Z` 成功返回 5 个候选；响应 SHA-256 为 `cd9db395a50611005cd97cd5057f2b6a072e2127acb1c115ac47e5869824a218`。候选保持未验证，不自动进入事实。
 

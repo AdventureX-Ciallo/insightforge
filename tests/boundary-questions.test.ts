@@ -6,11 +6,12 @@ import test from "node:test";
 
 import { buildBoundaryQuestions } from "../src/boundary-questions.js";
 import { createInsightForgeServer } from "../src/server.js";
+import { fetchForPoll } from "./http-poll.js";
 
 async function completedRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { run?: Parameters<typeof buildBoundaryQuestions>[0] };
     if (body.run) return body.run;
     await new Promise((resolveWait) => setTimeout(resolveWait, 20));

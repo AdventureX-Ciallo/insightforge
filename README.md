@@ -1,8 +1,6 @@
 # InsightForge
 
-> 当前状态（2026-08-29）：ABloom React 工作台已经并入统一构建与后端运行时；本地 188/188 Node 测试、`src/**` 四项覆盖率 100%、24/24 契约、737,500 例 fuzz、非默认端口真实 React Playwright E2E 1/1、smoke、三连演示和密钥扫描通过，依赖审计为 0 漏洞。最终源码 ZIP 仍须在干净解压目录重跑同一组门禁；未打 Tag 或部署。
-
-当前量化基线：Node 测试 188/188；seeded fuzz 737,500 例。
+> 当前状态（2026-08-29）：ABloom React 工作台已经并入统一构建与后端运行时；本轮以前端请求、状态和用户路径为契约完成后端适配。当前证据为 197 个顶层测试、203/203 断言、`src/**` 四项覆盖率 100%、25/25 契约、770,000 例 fuzz 与 6/6 Chromium E2E；最终源码 ZIP、Tag 和部署尚未执行，细节以 [测试记录](docs/TEST-RESULTS.md) 为准。
 
 `从一个行业问题，到一份能下钻、能质疑、能更新的研究成果。`
 
@@ -45,11 +43,12 @@ npm audit --audit-level=high
 npm run package:source -- /absolute/path/InsightForge-source.zip
 ```
 
-命令同时生成 `InsightForge-source.zip.manifest.json`，记录基线 commit、ZIP 大小、SHA-256、文件数和排除规则。源码包排除可再生成或单独提交的 `demo-assets/`、`docs/assets/` 展示资产，但保留离线运行所需的 `fixtures/golden/` 输入。
+命令同时生成 `InsightForge-source.zip.manifest.json`，记录基线 commit、ZIP 大小、SHA-256、文件数和排除规则。源码包排除可再生成的 `public/` 前端构建产物及可单独提交的 `demo-assets/`、`docs/assets/` 展示资产，但保留 React 源码 `web/` 与离线运行所需的 `fixtures/golden/` 输入。
 
-生产启动（`prestart` 会先完成生产构建，干净克隆不要求手工生成 `dist/`）：
+生产启动分为明确的构建与运行两步；`npm start` 只执行已构建的 `dist/server.js`，重启不会隐式调用 TypeScript 编译器：
 
 ```bash
+npm run build
 npm start
 ```
 
@@ -105,9 +104,11 @@ INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS=16384
 
 - `GET /api/health`：服务与默认离线模式健康状态。
 - `GET /api/csrf`：向 React 客户端声明当前 CSRF 能力；本地同源模式返回 `{ token: null, required: false }`，写请求仍由随机 request key 与同源检查保护。
-- `GET /api/current`：当前完整运行；尚无运行时返回 `200 { "run": null }`，避免 React 启动探测产生错误日志。
+- `GET /api/current`：返回 `{ run, job }`。运行中可仅有 job，供无状态 React 页面刷新后恢复同一 run 并重连 SSE；尚无任何任务时返回 `200 { "run": null, "job": null }`。
+- `POST /api/runs`：创建任务；React 每次用户动作携带 `x-insightforge-idempotency-key`，同 key/同请求重放返回同一 run，同 key/不同请求返回 409。
 - `GET /api/runs/:id`：任务状态、五步进度及完成后的运行对象。
 - `GET /api/runs/:id/events`：SSE 步骤、工具、心跳和终态流。
+- `POST /api/runs/:id/cancel`：取消已离开的运行中任务并释放并发槽；重复取消幂等。
 - `POST /api/runs/:id/decisions`：确认、驳回或编辑候选结论。
 - `POST /api/runs/:id/source-update`：用于内置黄金问题一次性 v1→v2 更新；缓存模型和在线单端点模型运行都由后端沿实际 Evidence→Datum→Claim→Conclusion 依赖图确定受影响对象、撤销相关确认并持久化新成果版本，前端不保存影子状态。
 - `GET /api/presets`：固定返回 1 个黄金案例和 2 个诚实失配案例。
@@ -115,7 +116,7 @@ INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS=16384
 - `GET /api/runs/:id/artifact-versions[/N]`：列出或下钻不可变成果快照；每个人工动作和来源更新推进版本。
 - `GET /api/runs/:id/artifacts/:kind?version=N`：按版本下载 `REPORT_MD / REPORT_PDF / PPTX / EVIDENCE_JSON`。
 - `GET/POST /api/settings/llm`：单 HTTPS 模型端点配置；POST 接受 `baseUrl / model / apiKey` 及可选整数 `planMaxTokens / synthesisMaxTokens`（256–32768，默认 8192/16384）；key、base URL 与 model 只以掩码返回，非敏感预算原值返回，设置以 `0600` 原子落盘并整体优先于环境变量。
-- 所有写请求默认要求服务端随机 request key，并校验 `Origin` / `Sec-Fetch-Site`；首页会在不改前端源码的情况下通过 CSP nonce 引导脚本自动加上 `x-insightforge-request-key`。仅本地调试可显式设置 `INSIGHTFORGE_DISABLE_REQUEST_KEY=1` 关闭，禁止用于共享或不可信网络。
+- 所有写请求默认要求服务端随机 request key，并校验 `Origin` / `Sec-Fetch-Site`；首页通过 CSP nonce 引导脚本为同源请求自动加上 `x-insightforge-request-key`。`INSIGHTFORGE_DISABLE_REQUEST_KEY=1` 仅在 `NODE_ENV=test` 时允许，生产或普通开发启动会直接拒绝该绕过。
 - 服务端把 `Host` 固定为回环 IP 与实际监听端口；若配置 `HOST=localhost`，启动前先验证全部 DNS 答案都是回环地址并绑定其中一个字面 IP，拒绝未验证的 `localhost` Host 和 DNS rebinding 形式的非回环 Host。
 - 运行模式标签来自 `synthesisMode`：在线单端点模型不会再被标成“使用缓存快照”，同时会诚实保留“信源使用缓存快照”的来源边界；该状态同步进入 API、JSON 和 PPTX。
 - `POST /api/sources/search`：选择 `bing / google / baidu`，只返回尚未成为证据的候选来源。
@@ -162,13 +163,15 @@ POST /api/runs  { "researchQuestion": "...", "uploadIds": ["<upload UUID>"] }
 
 `web/` 是 ABloom 交付的 React 工作台，根包把它作为 npm workspace 纳入安装、类型检查和生产构建。后端保持前端用户路径不变，并提供启动探测、同源写边界、SSE（失败时轮询回退）、上传三方 SHA-256 核验、五状态运行、人工确认/驳回/编辑、黄金来源 v1→v2 更新以及四种成果下载。
 
-页面刷新时 `GET /api/current` 在尚无历史运行的情况下返回 `200 { "run": null }`；字体等 Vite 静态资产使用正确 MIME；服务启动前会验证首页实际引用的本地 bundle，避免前端已构建但后端仍误判旧 `app.js/styles.css` 为运行合同。真实浏览器验收覆盖从选题、上传、SSE 五状态、证据下钻、人工决定、来源变化到 PPTX 下载解析的完整路径。
+页面刷新时 `GET /api/current` 返回当前 run 与最新 job；运行中的 job 会恢复到原研究问题并重连 SSE，失败 job 会保留可见错误，而不是让前端误回首页。尚无历史运行时返回 `200 { "run": null, "job": null }`。字体等 Vite 静态资产使用正确 MIME；服务启动前会验证首页实际引用的本地 bundle。真实浏览器验收覆盖从选题、上传、SSE 五状态、证据下钻、人工决定、来源变化、复核到 PPTX 下载解析的完整路径。
 
 ## 后端测试门禁
 
 `npm run verify` 强制依次执行生产源码及全部 Node/fuzz/E2E/React TypeScript 的严格类型检查、覆盖率、生产构建、密钥扫描、`npm run contract:check` 和确定性 fuzz；Node 测试文件串行运行，避免多个 PDF/PPTX 与本地 HTTP 压力用例互相争用资源而制造偶发网络假失败。契约自检启动临时 loopback 服务，真实调用 SSE、上传、搜索候选、五状态任务、人工决定、来源更新、版本链及四格式下载。`npm run coverage` 使用 c8 对 `src/**` 执行全量测试，并对 statements、branches、functions、lines 四项都强制 100%。密钥扫描同时遍历工作区文件，因此 Git 忽略的 `.env` 也会触发失败。当前 Path 1–6 各有一个显式攻击用例，覆盖边界 preset 泄漏、失败伪成功、非法确认、未完成边界输出、旧版本改写和混合公网/私网 DNS 响应的请求前阻断。该用例不等同于消除出站 `fetch` 的 DNS TOCTOU。
 
 `npm run clean` 会删除 `dist/`、覆盖率、Playwright 证据以及本地 `.insightforge/` 运行状态；需要保留的成果请先复制到仓库外。
+
+进程收到 `SIGINT` 或 `SIGTERM` 时会先中止仍在执行的任务、等待运行 Promise 收口并关闭 loopback 监听，再设置退出状态；关闭失败只输出脱敏错误。根目录 `package.json#packageManager` 与 `package-lock.json` 是唯一安装合同。
 
 ## 文档入口
 

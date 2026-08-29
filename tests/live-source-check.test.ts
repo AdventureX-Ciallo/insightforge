@@ -2,7 +2,26 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 
-import { checkLiveSources } from "../src/tools/live-source-check.js";
+import { checkLiveSources as checkLiveSourcesWithResolver } from "../src/tools/live-source-check.js";
+
+const publicResolver = async () => [{ address: "93.184.216.34", family: 4 }];
+const checkLiveSources = (fetcher: Parameters<typeof checkLiveSourcesWithResolver>[0]) =>
+  checkLiveSourcesWithResolver(fetcher, publicResolver);
+
+test("authority checks reject private DNS answers before any network request", async () => {
+  let fetchCalls = 0;
+  const result = await checkLiveSourcesWithResolver(
+    async () => {
+      fetchCalls += 1;
+      return new Response("must not be reached");
+    },
+    async () => [{ address: "127.0.0.1", family: 4 }],
+  );
+
+  assert.equal(fetchCalls, 0);
+  assert.ok(result.results.every((item) => item.status === "failed"));
+  assert.ok(result.results.every((item) => /private|reserved|loopback/iu.test(item.error ?? "")));
+});
 
 test("live source check only requests the fixed authority allowlist and hashes returned bytes", async () => {
   const requested: string[] = [];

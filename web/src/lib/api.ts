@@ -27,6 +27,8 @@ export type ResearchRun = any
 
 export interface RunJob {
   runId: string
+  researchQuestion: string | null
+  createdAt: string | null
   status: 'running' | 'completed' | 'failed'
   steps: BackendStep[]
   error: string | null
@@ -88,18 +90,20 @@ export class ApiError extends Error {
 export const api = {
   health: () => req<{ ok: boolean; offlineDemo: boolean; defaultSynthesisMode: string }>('/health'),
 
-  current: () => req<{ run: ResearchRun }>('/current'),
+  current: () => req<{ run: ResearchRun | null; job: RunJob | null }>('/current'),
 
   presets: () => req<{ id: string; question: string; kind: 'golden' | 'boundary'; description: string }[]>('/presets'),
 
-  createRun: (researchQuestion: string, uploadIds: string[] = []) =>
+  createRun: (researchQuestion: string, uploadIds: string[] = [], idempotencyKey = crypto.randomUUID()) =>
     req<{ runId: string; statusUrl: string }>('/runs', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-insightforge-idempotency-key': idempotencyKey },
       body: JSON.stringify({ researchQuestion, uploadIds }),
     }),
 
   getRun: (runId: string) => req<{ job: RunJob; run?: ResearchRun }>(`/runs/${runId}`),
+
+  cancelRun: (runId: string) => req<{ job: RunJob }>(`/runs/${runId}/cancel`, { method: 'POST' }),
 
   decide: (runId: string, body: { conclusionId: string; action: 'CONFIRM' | 'REJECT' | 'EDIT'; text?: string; reason?: string; scopeNote?: string }) =>
     req<{ run: ResearchRun }>(`/runs/${runId}/decisions`, {
@@ -119,11 +123,19 @@ export const api = {
   artifactUrl: (runId: string, kind: string, version?: number) =>
     `${BASE}/runs/${runId}/artifacts/${kind}${version ? `?version=${version}` : ''}`,
 
-  liveSearch: (query: string) =>
-    req<{ mode: string; provider: string; query: string; capturedAt: string; results: { id: string; title: string; url: string; excerpt: string }[] }>(
-      '/sources/live-search',
-      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query }) },
-    ),
+  liveSearch: async (query: string, engine: 'bing' | 'google' | 'baidu') => {
+    const response = await req<{
+      engine: 'bing' | 'google' | 'baidu'
+      query: string
+      capturedAt: string
+      candidates: { title: string; url: string; engine: 'bing' | 'google' | 'baidu' }[]
+    }>('/sources/search', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ engine, query }),
+    })
+    return { provider: response.engine, query: response.query, capturedAt: response.capturedAt, results: response.candidates }
+  },
 
   liveCheck: () =>
     req<{ mode: string; checkedAt: string; results: { title: string; url: string; status: string; httpStatus: number | null; sizeBytes: number | null; sha256: string | null; error: string | null }[] }>(
@@ -182,8 +194,12 @@ export function subscribeRunEvents(runId: string, handlers: SseHandlers): () => 
       const data = JSON.parse((e as MessageEvent).data) as { status: 'completed' | 'failed'; error: string | null }
       handlers.onTerminal(data.status, data.error)
     } catch {
-      /* 忽略坏帧 */
+      handlers.onError()
     }
+    source.close()
+  })
+  source.addEventListener('stream-end', () => {
+    handlers.onError()
     source.close()
   })
   source.onerror = () => {

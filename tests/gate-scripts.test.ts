@@ -28,6 +28,7 @@ test("test, coverage, and fuzz gates do not depend on POSIX env syntax or shell 
   assert.match(invalid.stderr, /Usage: node scripts\/test-command\.mjs tests\|fuzz/u);
   const c8Manifest = JSON.parse(await readFile(resolve("node_modules/c8/package.json"), "utf8")) as { engines: { node: string } };
   assert.equal(manifest.engines.node, c8Manifest.engines.node, "project Node range must not claim versions rejected by the coverage gate dependency");
+  assert.match(await readFile(resolve("scripts/test-command.mjs"), "utf8"), /install-fetch-isolation\.ts/u);
 });
 
 test("the aggregate verification gate cannot omit contract or fuzz checks", async () => {
@@ -37,7 +38,9 @@ test("the aggregate verification gate cannot omit contract or fuzz checks", asyn
   assert.match(manifest.scripts.verify!, /(?:^|&&\s*)npm run fuzz(?:\s*&&|$)/u);
   for (const metric of ["statements", "branches", "functions", "lines"]) assert.match(manifest.scripts.coverage!, new RegExp(`--${metric} 100`, "u"));
   assert.equal(manifest.bin.insightforge, "./dist/server.js");
-  for (const lifecycle of ["prestart", "predemo", "predemo:triple", "presmoke"]) assert.match(manifest.scripts[lifecycle]!, /npm run build/u);
+  assert.equal(manifest.scripts.prestart, undefined, "production start must not invoke the compiler on every process restart");
+  assert.equal(manifest.scripts.start, "node dist/server.js");
+  for (const lifecycle of ["predemo", "predemo:triple", "presmoke"]) assert.match(manifest.scripts[lifecycle]!, /npm run build/u);
 });
 
 test("source packaging excludes presentation assets but retains executable golden fixtures", async () => {
@@ -48,7 +51,7 @@ test("source packaging excludes presentation assets but retains executable golde
     assert.equal(result.status, 0, result.stderr);
     const archive = await JSZip.loadAsync(await readFile(archivePath));
     const paths = Object.keys(archive.files);
-    assert.equal(paths.some((path) => path.startsWith("demo-assets/") || path.startsWith("docs/assets/")), false);
+    assert.equal(paths.some((path) => path.startsWith("demo-assets/") || path.startsWith("docs/assets/") || path.startsWith("public/")), false);
     assert.ok(paths.includes(".gitattributes"), "source archive must preserve fixture byte-stability policy");
     assert.ok(paths.includes("fixtures/golden/market-brief.pdf"));
     assert.ok(paths.includes("fixtures/golden/market_v1.csv"));
@@ -60,7 +63,7 @@ test("source packaging excludes presentation assets but retains executable golde
     const packageManifest = JSON.parse(await readFile(`${archivePath}.manifest.json`, "utf8")) as {
       exclusions: { paths: string[]; directories: string[] };
     };
-    assert.deepEqual(packageManifest.exclusions.paths, ["demo-assets", "docs/assets"]);
+    assert.deepEqual(packageManifest.exclusions.paths, ["demo-assets", "docs/assets", "public"]);
     assert.ok(packageManifest.exclusions.directories.includes(".insightforge"), "runtime settings and API keys must never enter source ZIPs");
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -87,10 +90,10 @@ test("secret scan sees a gitignored .env from the filesystem, not only the Git i
   }
 });
 
-test("clean declares every generated runtime and test directory", async () => {
+test("clean declares every generated runtime, test, and incremental-build target", async () => {
   const script = await readFile(resolve("scripts/clean.mjs"), "utf8");
-  for (const directory of ["dist", "coverage", "coverage-detail", ".insightforge", "evidence", "test-results", "playwright-report"]) {
-    assert.match(script, new RegExp(directory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+  for (const target of ["dist", "public", "coverage", "coverage-detail", ".insightforge", "evidence", "test-results", "playwright-report", "tsconfig.tsbuildinfo", "web/tsconfig.tsbuildinfo"]) {
+    assert.match(script, new RegExp(target.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   }
 });
 

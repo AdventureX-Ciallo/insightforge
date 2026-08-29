@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 
 import { z } from "zod";
@@ -43,7 +44,9 @@ function normalizedConfig(input: Record<string, unknown>): LlmConfig {
   } catch {
     throw new SettingsStoreError(400, "LLM baseUrl must be a valid HTTPS URL");
   }
-  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || !endpoint.hostname) {
+  const hostname = endpoint.hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || !hostname
+    || isIP(hostname) !== 0 || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
     throw new SettingsStoreError(400, "LLM baseUrl must use HTTPS without embedded credentials");
   }
   const planMaxTokens = input.planMaxTokens;
@@ -99,10 +102,14 @@ export async function saveApiLlmSettings(workspaceDir: string, input: Record<str
   const path = join(root, "settings.json");
   const temporaryPath = join(root, `.settings-${randomUUID()}.tmp`);
   const value = { schemaVersion: "1.0", llm: { ...config, updatedAt: new Date().toISOString() } };
-  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  await rename(temporaryPath, path);
-  await chmod(path, 0o600);
-  return config;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+    return config;
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
 }
 
 export function publicLlmSettings(apiConfig: LlmConfig | null, env: NodeJS.ProcessEnv = process.env) {

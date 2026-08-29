@@ -8,10 +8,11 @@ import JSZip from "jszip";
 
 import { runGoldenCase } from "../src/engine.js";
 import { createInsightForgeServer } from "../src/server.js";
+import { fetchForPoll } from "./http-poll.js";
 
 async function completedRun(baseUrl: string, runId: string) {
   for (let attempt = 0; attempt < 150; attempt += 1) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { job: { status: string; error?: string }; run?: Record<string, unknown> };
     if (body.job.status === "completed") return body.run as {
       uploadedFileIds: string[];

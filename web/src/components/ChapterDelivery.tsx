@@ -7,6 +7,7 @@ const TRIGGER_TEXT: Record<string, string> = {
   HUMAN_DECISION: '人工决定',
   HUMAN_EDIT: '人工编辑',
   SOURCE_UPDATE: '来源更新',
+  REVALIDATION: '重新复核',
 }
 
 const KIND_META: Record<string, { title: string; note: string; icon: typeof FileText }> = {

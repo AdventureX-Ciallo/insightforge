@@ -135,7 +135,15 @@ test("loopback API rejects cross-site and keyless writes while the nonce-bootstr
 
 test("request-key protection can only be disabled through its explicit development environment flag", async () => {
   const priorDisable = process.env.INSIGHTFORGE_DISABLE_REQUEST_KEY;
+  const priorNodeEnv = process.env.NODE_ENV;
   process.env.INSIGHTFORGE_DISABLE_REQUEST_KEY = "1";
+  process.env.NODE_ENV = "production";
+  assert.throws(() => createInsightForgeServer({
+    fixtureDir: resolve("fixtures/golden"),
+    publicDir: resolve("public"),
+    workspaceDir: join(tmpdir(), "must-not-start"),
+  }), /permitted only when NODE_ENV=test/u);
+  process.env.NODE_ENV = "test";
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-csrf-disabled-"));
   const app = createInsightForgeServer({
     fixtureDir: resolve("fixtures/golden"),
@@ -155,5 +163,7 @@ test("request-key protection can only be disabled through its explicit developme
     await app.stop();
     if (priorDisable === undefined) delete process.env.INSIGHTFORGE_DISABLE_REQUEST_KEY;
     else process.env.INSIGHTFORGE_DISABLE_REQUEST_KEY = priorDisable;
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
   }
 });

@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import {
   evidencePackageSchema,
@@ -46,9 +47,9 @@ function packageFor(run: ResearchRun) {
     artifacts: [...run.artifacts, ...run.artifactHistory].map((item) => ({ kind: item.kind, fileName: item.fileName })),
   });
 }
-async function record(path: string, kind: ArtifactRecord["kind"], version: number, id: string): Promise<ArtifactRecord> {
-  const info = await stat(path);
-  return { id, kind, path, sha256: await hashFile(path), sizeBytes: info.size, fileName: basename(path), version };
+async function record(readPath: string, kind: ArtifactRecord["kind"], version: number, id: string, publishedPath = readPath): Promise<ArtifactRecord> {
+  const info = await stat(readPath);
+  return { id, kind, path: publishedPath, sha256: await hashFile(readPath), sizeBytes: info.size, fileName: basename(publishedPath), version };
 }
 /** 每次可见状态变化均新增不可覆盖版本；run.artifacts 当前版本在前，历史版本随后保留。 */
 export async function writeArtifactVersion(
@@ -58,62 +59,88 @@ export async function writeArtifactVersion(
   context: { triggerRef: string; adjustmentNote: string },
 ): Promise<ArtifactRecord[]> {
   const version = Math.max(0, ...run.artifactVersions.map((item) => item.version)) + 1;
-  const versionDir = join(resolve(workspaceDir), run.id, "artifacts", `v${version}`);
+  const artifactsRoot = join(resolve(workspaceDir), run.id, "artifacts");
+  const versionDir = join(artifactsRoot, `v${version}`);
+  const stagingDir = join(artifactsRoot, `.v${version}-${randomUUID()}.staging`);
   assertInside(workspaceDir, versionDir);
-  await mkdir(versionDir, { recursive: true });
-  for (const item of run.artifactVersions) if (item.status === "CURRENT") item.status = "SUPERSEDED";
-  const previous = [...run.artifactVersions].sort((a, b) => b.version - a.version)[0] ?? null;
-  run.researchSnapshotId = computeResearchSnapshotId(run);
+  assertInside(workspaceDir, stagingDir);
+  await mkdir(artifactsRoot, { recursive: true });
+  try {
+    await stat(versionDir);
+    throw new Error(`Artifact version target v${version} already exists`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await mkdir(stagingDir);
+  const nextRun = structuredClone(run);
+  for (const item of nextRun.artifactVersions) if (item.status === "CURRENT") item.status = "SUPERSEDED";
+  const previous = [...nextRun.artifactVersions].sort((a, b) => b.version - a.version)[0] ?? null;
+  nextRun.researchSnapshotId = computeResearchSnapshotId(nextRun);
   const pptxPath = join(versionDir, "insightforge-report.pptx");
   const jsonPath = join(versionDir, "evidence-package.json");
   const markdownPath = join(versionDir, "insightforge-report.md");
   const pdfPath = join(versionDir, "insightforge-report.pdf");
+  const stagingPptxPath = join(stagingDir, basename(pptxPath));
+  const stagingJsonPath = join(stagingDir, basename(jsonPath));
+  const stagingMarkdownPath = join(stagingDir, basename(markdownPath));
+  const stagingPdfPath = join(stagingDir, basename(pdfPath));
   const pptxId = hashValue({ runId: run.id, version, kind: "PPTX" });
   const jsonId = hashValue({ runId: run.id, version, kind: "EVIDENCE_JSON" });
   const markdownId = hashValue({ runId: run.id, version, kind: "REPORT_MD" });
   const pdfId = hashValue({ runId: run.id, version, kind: "REPORT_PDF" });
   const artifactVersion: ArtifactVersion = {
-    id: hashValue({ runId: run.id, version, trigger, researchSnapshotId: run.researchSnapshotId }),
-    researchSnapshotId: run.researchSnapshotId,
+    id: hashValue({ runId: run.id, version, trigger, researchSnapshotId: nextRun.researchSnapshotId }),
+    researchSnapshotId: nextRun.researchSnapshotId,
     version,
     createdAt: new Date().toISOString(),
     trigger,
     triggerRef: context.triggerRef,
     adjustmentNote: context.adjustmentNote,
     artifactIds: [pptxId, jsonId, markdownId, pdfId],
-    sources: structuredClone(run.sources),
-    evidence: structuredClone(run.evidence),
-    conclusions: structuredClone(run.conclusions),
-    rejectedDrafts: structuredClone(run.rejectedDrafts),
-    rejectedDraftOverflowCount: run.rejectedDraftOverflowCount,
+    sources: structuredClone(nextRun.sources),
+    evidence: structuredClone(nextRun.evidence),
+    conclusions: structuredClone(nextRun.conclusions),
+    rejectedDrafts: structuredClone(nextRun.rejectedDrafts),
+    rejectedDraftOverflowCount: nextRun.rejectedDraftOverflowCount,
     status: "CURRENT",
     supersedesId: previous?.id ?? null,
   };
-  run.artifactVersions.push(artifactVersion);
-  const evictedVersions = run.artifactVersions.sort((left, right) => left.version - right.version).splice(0, Math.max(0, run.artifactVersions.length - MAX_ARTIFACT_VERSIONS));
+  nextRun.artifactVersions.push(artifactVersion);
+  const evictedVersions = nextRun.artifactVersions.sort((left, right) => left.version - right.version).splice(0, Math.max(0, nextRun.artifactVersions.length - MAX_ARTIFACT_VERSIONS));
   const evictedVersionNumbers = new Set(evictedVersions.map((item) => item.version));
-  run.evictedArtifactVersionCount += evictedVersions.length;
-  await writePptx(run, pptxPath);
-  // 当前版本先以稳定文件名进入包；文件字节哈希由外层 ArtifactRecord 记录，避免 JSON 自哈希递归。
-  const historical = [...run.artifacts, ...run.artifactHistory].filter((item) => !evictedVersionNumbers.has(item.version));
-  run.artifactHistory = historical;
-  run.artifacts = [
+  nextRun.evictedArtifactVersionCount += evictedVersions.length;
+  // 当前版本先以最终稳定路径进入包；字节在同目录 staging 中生成并核验，避免 JSON 自哈希递归。
+  const historical = [...nextRun.artifacts, ...nextRun.artifactHistory].filter((item) => !evictedVersionNumbers.has(item.version));
+  nextRun.artifactHistory = historical;
+  nextRun.artifacts = [
     { id: pptxId, kind: "PPTX", path: pptxPath, sha256: "0".repeat(64), sizeBytes: 1, fileName: basename(pptxPath), version },
     { id: jsonId, kind: "EVIDENCE_JSON", path: jsonPath, sha256: "0".repeat(64), sizeBytes: 1, fileName: basename(jsonPath), version },
     { id: markdownId, kind: "REPORT_MD", path: markdownPath, sha256: "0".repeat(64), sizeBytes: 1, fileName: basename(markdownPath), version },
     { id: pdfId, kind: "REPORT_PDF", path: pdfPath, sha256: "0".repeat(64), sizeBytes: 1, fileName: basename(pdfPath), version },
   ];
-  await writeMarkdownReport(run, markdownPath);
-  await writePdfReport(run, pdfPath);
-  await writeFile(jsonPath, `${JSON.stringify(packageFor(run), null, 2)}\n`, "utf8");
-  const current = [
-    await record(pptxPath, "PPTX", version, pptxId),
-    await record(jsonPath, "EVIDENCE_JSON", version, jsonId),
-    await record(markdownPath, "REPORT_MD", version, markdownId),
-    await record(pdfPath, "REPORT_PDF", version, pdfId),
-  ];
-  run.artifacts = current;
-  return current;
+  try {
+    await writePptx(nextRun, stagingPptxPath);
+    await writeMarkdownReport(nextRun, stagingMarkdownPath);
+    await writePdfReport(nextRun, stagingPdfPath);
+    await writeFile(stagingJsonPath, `${JSON.stringify(packageFor(nextRun), null, 2)}\n`, "utf8");
+    const current = [
+      await record(stagingPptxPath, "PPTX", version, pptxId, pptxPath),
+      await record(stagingJsonPath, "EVIDENCE_JSON", version, jsonId, jsonPath),
+      await record(stagingMarkdownPath, "REPORT_MD", version, markdownId, markdownPath),
+      await record(stagingPdfPath, "REPORT_PDF", version, pdfId, pdfPath),
+    ];
+    nextRun.artifacts = current;
+    await rename(stagingDir, versionDir);
+    run.researchSnapshotId = nextRun.researchSnapshotId;
+    run.artifactVersions = nextRun.artifactVersions;
+    run.evictedArtifactVersionCount = nextRun.evictedArtifactVersionCount;
+    run.artifactHistory = nextRun.artifactHistory;
+    run.artifacts = current;
+    return current;
+  } catch (error) {
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 export async function persistRun(run: ResearchRun, workspaceDir: string, updateCurrent = true) {
   const runDir = join(resolve(workspaceDir), run.id);
@@ -134,7 +161,12 @@ export async function persistRun(run: ResearchRun, workspaceDir: string, updateC
     if (!entry.isDirectory() || !/^v[1-9]\d*$/u.test(entry.name) || retained.has(entry.name)) continue;
     const evictedDir = join(artifactsDir, entry.name);
     assertInside(workspaceDir, evictedDir);
-    await rm(evictedDir, { recursive: true, force: true });
+    try {
+      await rm(evictedDir, { recursive: true, force: true });
+    } catch {
+      // The run/current snapshots are already atomically published. Garbage collection is
+      // therefore best-effort: a cleanup failure must not make callers retry a committed mutation.
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   MAX_TOTAL_SSE_SUBSCRIBERS,
   writeSseChunk,
 } from "../src/server.js";
+import { fetchForPoll } from "./http-poll.js";
 
 interface SseMessage {
   event: string;
@@ -20,8 +21,8 @@ interface SseMessage {
     status?: string;
     reason?: string;
     reconnect?: boolean;
-    steps?: Array<{ state: string; status: string }>;
-    event?: { toolName: string; status: string };
+    steps?: Array<{ state: string; status: string; error?: string | null }>;
+    event?: { toolName: string; status: string; error?: string | null };
   };
 }
 
@@ -66,7 +67,7 @@ async function createRun(baseUrl: string, researchQuestion: string) {
 async function waitForTerminal(baseUrl: string, runId: string) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { job: { status: string }; run?: unknown };
     if (body.job.status !== "running") return body;
     await new Promise((resolveWait) => setTimeout(resolveWait, 10));
@@ -132,6 +133,32 @@ test("SSE streams real steps and tools, heartbeats, terminal closure, and isolat
     const replayMessages = await consumeSse(replay);
     assert.ok(replayMessages.some((message) => message.event === "tool"), "completed streams replay tool history");
     assert.equal(replayMessages.at(-1)?.event, "terminal");
+  } finally {
+    await app.stop();
+  }
+});
+
+test("SSE failure frames redact internal paths exactly like polling", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-sse-redaction-"));
+  const fixtureDir = join(workspaceDir, "fixtures");
+  await cp(resolve("fixtures/golden"), fixtureDir, { recursive: true });
+  const app = createInsightForgeServer({
+    fixtureDir,
+    publicDir: resolve("public"),
+    workspaceDir,
+    stepDelayMs: 20,
+  });
+  const baseUrl = await app.start(0, "127.0.0.1");
+  try {
+    await rm(join(fixtureDir, "market_v1.csv"));
+    const runId = await createRun(baseUrl, "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？");
+    const messages = await consumeSse(await fetch(`${baseUrl}/api/runs/${runId}/events`));
+    const failedSteps = messages.flatMap((message) => message.data?.steps ?? []).filter((step) => step.status === "failed");
+    const failedTools = messages.map((message) => message.data?.event).filter((event) => event?.status === "failed");
+    assert.ok(failedSteps.length > 0);
+    assert.ok(failedSteps.every((step) => step.error === "Step failed"));
+    assert.ok(failedTools.every((event) => event?.error === "Tool failed"));
+    assert.doesNotMatch(JSON.stringify(messages), /ENOENT|insightforge-sse-redaction/iu);
   } finally {
     await app.stop();
   }

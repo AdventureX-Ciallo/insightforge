@@ -22,7 +22,8 @@
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
 | 3 个预设案例卡片（1 黄金 + 2 非黄金） | `GET /api/presets` → `[{id, question, kind: "golden"|"boundary", description}]` | 黄金案例全链路成功；两个边界案例进入失配路径并返回证据缺口（复用失配综合） |
-| 自定义问题输入 | `POST /api/runs {researchQuestion}`（8–240 字符校验） | 最多并行 2 个任务；超限返回 429 `RUN_CAPACITY_EXCEEDED` 与 `Retry-After: 1`；内存和磁盘只保留最近 10 个 run，当前/执行中任务不淘汰 |
+| 自定义问题输入 | `POST /api/runs {researchQuestion, uploadIds}`（8–240 Unicode 字符）；每次前端动作带 `x-insightforge-idempotency-key` | 同 key/同请求返回同一 run，同 key/不同请求 409；最多并行 2 个任务；超限返回 429 `RUN_CAPACITY_EXCEEDED` 与 `Retry-After: 1`；内存和磁盘只保留最近 10 个 run，当前/执行中任务不淘汰 |
+| 切换选题或离开运行中任务 | `POST /api/runs/:id/cancel` | 后端中止任务、持久化失败状态并释放并发槽；重复取消 200 幂等 |
 
 ## 路径 2：任务进度页 — 全节点实时展示
 
@@ -32,6 +33,7 @@
 |---|---|---|
 | 五状态轨道（PLAN→COLLECT→SYNTHESIZE→AUDIT→DELIVER），每节点 pending/running/success/failed | `GET /api/runs/:id` 轮询（现有 `RunStep[]`）；模型阶段在 events 中以 `llm-planner`/`llm-synthesizer` 工具事件出现 | 每步输出哈希被下一步消费；失败传播不误报成功（现有测试覆盖） |
 | SSE 实时流（React 默认使用，错误时回退轮询） | `GET /api/runs/:id/events`；每 run 最多 4 路、全局 6 路，超限 429 `SSE_CAPACITY_EXCEEDED`；60 秒无 step/tool 后以 `stream-end {reason:"idle-timeout", reconnect:true}` 断流 | 断流只释放订阅资源，后台任务继续；客户端自动回退轮询 |
+| 页面刷新恢复 | `GET /api/current → {run, job}` | 运行中只靠后端 job 恢复研究问题、步骤与 runId 并重连 SSE；失败状态可见；空状态为 `{run:null,job:null}` |
 | 每个工具调用的 inputSummary/时长/状态 | `run.events[]`（七字段完整） | 事件数 = 真实调用数，无装饰性条目 |
 | 信源读取明细（URL/PDF 页码/CSV 行号） | `run.sources[]` + `run.evidence[]` 定位字段 | 100% 引用可定位（现有 P0-04 测试） |
 
@@ -58,7 +60,7 @@
 
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
-| 版本时间线 V1→V5（首版 + 每次人工决定/来源更新推进一版） | `GET /api/runs/:id/artifact-versions` → `[{version, createdAt, trigger: "initial"|"human-decision"|"source-update", triggerRef, artifacts[], sources[], adjustmentNote}]`（路线图 P1-1） | 黄金 run + 2 次人工决定 + 1 次来源更新后版本链 ≥4；每版本 artifacts 含 .md/.pdf/.pptx/.json 四类真实文件 |
+| 版本时间线 V1→V5（首版 + 每次人工决定/来源更新/复核推进一版） | `GET /api/runs/:id/artifact-versions` → `[{version, createdAt, trigger: "initial"|"human-decision"|"source-update"|"revalidation", triggerRef, artifacts[], sources[], adjustmentNote}]` | 最多保留最近 5 个不可变版本，淘汰数量在 run 留痕；每版本 artifacts 含 .md/.pdf/.pptx/.json 四类真实文件 |
 | 单版本下钻（结论、来源、调整依据） | 版本快照内嵌结论/证据/来源引用 | 旧版本不可变；人工确认撤销（REVOKE_ON_SOURCE_UPDATE）在版本依据中可见 |
 
 ## 路径 6：来源更新 — 搜索引擎选择与影响传播

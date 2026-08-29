@@ -8,6 +8,7 @@ import { applyHumanDecision, runGoldenCase, type ResearchRun, type RunStep } fro
 import { researchPresets } from "../src/presets.js";
 import { createInsightForgeServer } from "../src/server.js";
 import { searchSelectedEngine } from "../src/tools/search-engines.js";
+import { fetchForPoll } from "./http-poll.js";
 
 const goldenQuestion = researchPresets.find((preset) => preset.kind === "golden")!.question;
 
@@ -18,7 +19,7 @@ async function workspace(prefix: string) {
 async function waitForRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { job: { status: string }; run?: ResearchRun };
     if (body.run) return body.run;
     if (body.job.status === "failed") throw new Error("Research run failed");

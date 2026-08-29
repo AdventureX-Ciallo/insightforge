@@ -1,10 +1,10 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { createInsightForgeServer } from "../../src/server.js";
-import { invariant } from "./harness.js";
-import type { SeededPrng } from "./prng.js";
+import { invariant, suiteSeed } from "./harness.js";
+import { SeededPrng } from "./prng.js";
 
 const MISSING_ID = "00000000-0000-4000-8000-000000000000";
 const ENDPOINTS = [
@@ -68,17 +68,18 @@ export async function runApiFuzz(rng: SeededPrng, cases: number) {
         const index = nextCase;
         nextCase += 1;
         if (index >= cases) return;
+        const caseRng = new SeededPrng(suiteSeed(rng.seed, `http-api-case-${index}`));
         const [expectedMethod, endpoint] = ENDPOINTS[index % ENDPOINTS.length]!;
-        const method = index < ENDPOINTS.length ? expectedMethod : rng.pick(methods);
-        const path = index < ENDPOINTS.length ? endpoint : fuzzPath(rng, endpoint);
+        const method = index < ENDPOINTS.length ? expectedMethod : caseRng.pick(methods);
+        const path = index < ENDPOINTS.length ? endpoint : fuzzPath(caseRng, endpoint);
         const headers: Record<string, string> = { "content-type": "application/json" };
         let body: string | undefined;
         if (method !== "GET" && method !== "OPTIONS") {
           if (endpoint === "/api/uploads") {
-            headers["x-insightforge-file-name"] = encodeURIComponent(`${rng.token()}.txt`);
-            body = String.fromCharCode(...rng.bytes(64, 1));
+            headers["x-insightforge-file-name"] = encodeURIComponent(`${caseRng.token()}.txt`);
+            body = String.fromCharCode(...caseRng.bytes(64, 1));
           } else {
-            body = rng.int(10) === 0 ? "{" : JSON.stringify(bodyFor(endpoint, rng));
+            body = caseRng.int(10) === 0 ? "{" : JSON.stringify(bodyFor(endpoint, caseRng));
           }
         }
         const response = await fetch(`${baseUrl}${path}`, { method, headers, ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(5_000) });
@@ -91,6 +92,7 @@ export async function runApiFuzz(rng: SeededPrng, cases: number) {
     invariant(health.status === 200, "API fuzz left the server process unhealthy");
   } finally {
     await app.stop();
+    await rm(workspaceDir, { recursive: true, force: true });
   }
   return { cases, value: undefined };
 }

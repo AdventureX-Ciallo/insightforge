@@ -680,11 +680,17 @@ export const humanDecisionSchema = z.object({
   sourceUpdateId: z.string().nullable(),
 }).strict();
 
+function codePointBoundedString(maximum: number) {
+  return z.string().refine((value) => [...value].length <= maximum, {
+    message: `String must contain at most ${maximum} Unicode characters`,
+  });
+}
+
 export const rejectedDraftSchema = z.object({
   draftIndex: z.number().int().nonnegative(),
-  text: z.string().max(MAX_REJECTED_DRAFT_TEXT_LENGTH),
+  text: codePointBoundedString(MAX_REJECTED_DRAFT_TEXT_LENGTH),
   textTruncated: z.boolean(),
-  evidenceIds: z.array(z.string().max(MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH)).max(MAX_REJECTED_DRAFT_EVIDENCE_IDS),
+  evidenceIds: z.array(codePointBoundedString(MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH)).max(MAX_REJECTED_DRAFT_EVIDENCE_IDS),
   evidenceIdsTruncated: z.boolean(),
   dropReason: z.enum(llmDraftDropReasons),
   droppedAt: z.string().datetime(),
@@ -1094,6 +1100,32 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
       graphIssue(ctx, ["artifactVersions", index, "rejectedDrafts"], "ArtifactVersion must preserve the immutable rejected draft trace");
     }
   });
+  const orderedArtifactVersions = [...run.artifactVersions].sort((left, right) => left.version - right.version);
+  if (orderedArtifactVersions.some((version, index) => version !== run.artifactVersions[index])) {
+    graphIssue(ctx, ["artifactVersions"], "ArtifactVersions must be stored in ascending version order");
+  }
+  if (orderedArtifactVersions.length > 0) {
+    const first = orderedArtifactVersions[0]!;
+    if (first.version !== run.evictedArtifactVersionCount + 1) {
+      graphIssue(ctx, ["evictedArtifactVersionCount"], "Artifact eviction count must match the retained version range");
+    }
+    if (first.version === 1 && first.supersedesId !== null) {
+      graphIssue(ctx, ["artifactVersions", 0, "supersedesId"], "The first ArtifactVersion must not supersede another version");
+    }
+    if (first.version > 1 && first.supersedesId === null) {
+      graphIssue(ctx, ["artifactVersions", 0, "supersedesId"], "The oldest retained ArtifactVersion must preserve its evicted predecessor reference");
+    }
+    orderedArtifactVersions.forEach((version, index) => {
+      const previous = orderedArtifactVersions[index - 1];
+      if (previous && (version.version !== previous.version + 1 || version.supersedesId !== previous.id)) {
+        graphIssue(ctx, ["artifactVersions", index, "supersedesId"], "ArtifactVersion must supersede the immediately preceding version");
+      }
+      const expectedStatus = index === orderedArtifactVersions.length - 1 ? "CURRENT" : "SUPERSEDED";
+      if (version.status !== expectedStatus) {
+        graphIssue(ctx, ["artifactVersions", index, "status"], "Only the newest ArtifactVersion may be current");
+      }
+    });
+  }
   if (run.artifactVersions.length > 0 && run.artifactVersions.filter((item) => item.status === "CURRENT").length !== 1) graphIssue(ctx, ["artifactVersions"], "Exactly one ArtifactVersion must be current");
   if (run.researchSnapshotId !== computeResearchSnapshotId(run)) graphIssue(ctx, ["researchSnapshotId"], "Research snapshot ID does not match the current evidence graph");
 });

@@ -31,7 +31,7 @@ function stripMarkup(value: string) {
  */
 export async function searchLiveSingleProvider(query: string, fetcher: LiveSearchFetcher = fetch, resolver?: SearchResolver) {
   const normalized = query.trim();
-  if (normalized.length < 2 || normalized.length > 160) throw new Error("Live search query must contain 2–160 characters");
+  if ([...normalized].length < 2 || [...normalized].length > 160) throw new Error("Live search query must contain 2–160 characters");
   const url = new URL(PROVIDER);
   url.searchParams.set("action", "query");
   url.searchParams.set("list", "search");

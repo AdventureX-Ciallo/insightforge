@@ -1,15 +1,49 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { createInsightForgeServer } from "../src/server.js";
+import { runGoldenCase } from "../src/engine.js";
+import { writeArtifactVersion } from "../src/artifacts.js";
+import { fetchForPoll } from "./http-poll.js";
+
+test("artifact generation is transactional when the target version cannot be published", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-artifact-transaction-"));
+  const run = await runGoldenCase({
+    researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir,
+  });
+  const before = structuredClone(run);
+  const collision = join(workspaceDir, run.id, "artifacts", "v2");
+  await mkdir(collision, { recursive: true });
+  await writeFile(join(collision, "owner-marker.txt"), "do not overwrite", "utf8");
+
+  await assert.rejects(
+    writeArtifactVersion(run, workspaceDir, "HUMAN_DECISION", { triggerRef: "collision", adjustmentNote: "injected target collision" }),
+    /already exists|publish artifact version/iu,
+  );
+  assert.deepEqual(run, before, "a failed artifact publication must not mutate the in-memory run");
+  assert.deepEqual(await readdir(collision), ["owner-marker.txt"], "an existing target is never overwritten");
+  assert.equal((await readdir(join(workspaceDir, run.id, "artifacts"))).some((name) => name.startsWith(".v2-")), false, "staging directories are cleaned");
+
+  await rm(collision, { recursive: true });
+  const invalid = structuredClone(run);
+  invalid.researchQuestion = "";
+  const invalidBefore = structuredClone(invalid);
+  await assert.rejects(
+    writeArtifactVersion(invalid, workspaceDir, "HUMAN_DECISION", { triggerRef: "invalid-package", adjustmentNote: "inject a post-staging schema failure" }),
+  );
+  assert.deepEqual(invalid, invalidBefore, "a post-staging failure must not mutate the in-memory run");
+  assert.equal((await readdir(join(workspaceDir, run.id, "artifacts"))).some((name) => name.startsWith(".v2-")), false, "post-staging failures remove temporary directories");
+});
 
 async function waitForRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { run?: { id: string } };
     if (body.run) return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 20));

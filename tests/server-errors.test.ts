@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -10,15 +11,21 @@ import test from "node:test";
 
 import { isMainModule } from "../src/main-module.js";
 import { DomainError } from "../src/domain-error.js";
+import { fetchForPoll } from "./http-poll.js";
 import {
   assertRuntimeAssets,
   contentType,
+  compareJobsByRecency,
   createInsightForgeServer,
   defaultServerPaths,
   discardRequestBody,
   endSseStream,
   friendlyListenError,
   inside,
+  installGracefulShutdown,
+  jobCreatedAt,
+  jobResearchQuestion,
+  llmCompletionEndpoint,
   loadLocalEnvironment,
   normalizeRequestMethod,
   pipeArtifactStream,
@@ -29,10 +36,46 @@ import {
   serverBaseUrl,
   settleServerClose,
   startDefaultServer,
+  startupFailureMessage,
   staticFilePath,
   uploadFileName,
   writeSseChunk,
 } from "../src/server.js";
+
+test("production shutdown handlers stop once and surface stop failure without leaking details", async () => {
+  assert.equal(startupFailureMessage(new Error("safe startup detail")), "safe startup detail");
+  assert.equal(startupFailureMessage("unknown"), "InsightForge failed to start");
+  const runtime = Object.assign(new EventEmitter(), { exitCode: undefined as number | undefined });
+  const messages: string[] = [];
+  const logger = {
+    log(message: string) { messages.push(message); },
+    error(message: string) { messages.push(message); },
+  };
+  let stops = 0;
+  const shutdown = installGracefulShutdown({
+    async stop() {
+      stops += 1;
+    },
+  }, runtime, logger);
+
+  assert.equal(runtime.listenerCount("SIGINT"), 1);
+  assert.equal(runtime.listenerCount("SIGTERM"), 1);
+  await shutdown("SIGTERM");
+  await shutdown("SIGINT");
+  assert.equal(stops, 1);
+  assert.equal(runtime.exitCode, 0);
+  assert.deepEqual(messages, ["InsightForge received SIGTERM; shutting down gracefully"]);
+
+  const failingRuntime = Object.assign(new EventEmitter(), { exitCode: undefined as number | undefined });
+  const failing = installGracefulShutdown({
+    async stop() {
+      throw new Error("SECRET_MUST_NOT_LEAK");
+    },
+  }, failingRuntime, logger);
+  await failing("SIGINT");
+  assert.equal(failingRuntime.exitCode, 1);
+  assert.equal(messages.at(-1), "InsightForge graceful shutdown failed");
+});
 
 async function prepareRuntimeRoot(root: string) {
   await cp(resolve("public"), join(root, "public"), { recursive: true });
@@ -54,7 +97,7 @@ function incoming(chunks: Array<string | Buffer | Uint8Array>, headers: Record<s
 async function waitForRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { job: { status: string }; run?: { artifacts: Array<{ kind: string }> } };
     if (body.run) return body.run;
     if (body.job.status === "failed") throw new Error("run failed");
@@ -90,10 +133,16 @@ test("request readers reject malformed, non-object, oversized, empty, and unsafe
   await assert.rejects(readUploadBytes(incoming([], { "content-length": "-1" }).request), /Content-Length/u);
   const declaredLarge = incoming([], { "content-length": String(5 * 1024 * 1024 + 1) });
   await assert.rejects(readUploadBytes(declaredLarge.request), /5 MiB/u);
-  assert.equal(declaredLarge.resumes(), 1);
+  assert.equal(declaredLarge.resumes(), 0);
+  const declaredHuge = incoming([], { "content-length": String(5 * 1024 * 1024 + 64 * 1024 + 1) });
+  await assert.rejects(readUploadBytes(declaredHuge.request), /5 MiB/u);
+  assert.equal(declaredHuge.resumes(), 1);
   const streamedLarge = incoming([new Uint8Array(5 * 1024 * 1024 + 1)]);
   await assert.rejects(readUploadBytes(streamedLarge.request), /5 MiB/u);
-  assert.equal(streamedLarge.resumes(), 1);
+  assert.equal(streamedLarge.resumes(), 0);
+  const streamedHuge = incoming([new Uint8Array(5 * 1024 * 1024 + 64 * 1024 + 1)]);
+  await assert.rejects(readUploadBytes(streamedHuge.request), /5 MiB/u);
+  assert.equal(streamedHuge.resumes(), 1);
   await assert.rejects(readUploadBytes(incoming([]).request), /empty/u);
   assert.deepEqual(await readUploadBytes(incoming([new Uint8Array([1, 2, 3])]).request), Buffer.from([1, 2, 3]));
 
@@ -147,6 +196,29 @@ test("request readers reject malformed, non-object, oversized, empty, and unsafe
   await assert.rejects(new Promise<void>((resolveClose, rejectClose) => settleServerClose(closeError, resolveClose, rejectClose)), closeError);
 });
 
+test("job metadata fallbacks and LLM completion endpoint normalization are deterministic", () => {
+  const run = { researchQuestion: "run question", createdAt: "2026-08-29T00:00:00.000Z" };
+  assert.equal(jobResearchQuestion({ researchQuestion: "job question", run }), "job question");
+  assert.equal(jobResearchQuestion({ run }), "run question");
+  assert.equal(jobResearchQuestion({}), null);
+
+  const steps = [{ startedAt: null }, { startedAt: "2026-08-29T00:00:01.000Z" }];
+  assert.equal(jobCreatedAt({ createdAt: "2026-08-29T00:00:02.000Z", run, steps }), "2026-08-29T00:00:02.000Z");
+  assert.equal(jobCreatedAt({ run, steps }), run.createdAt);
+  assert.equal(jobCreatedAt({ steps }), steps[1]!.startedAt);
+  assert.equal(jobCreatedAt({ steps: [{ startedAt: null }] }), null);
+  const undatedLeft = { runId: "run-a", steps: [{ startedAt: null }] };
+  const undatedRight = { runId: "run-b", steps: [{ startedAt: null }] };
+  assert.ok(compareJobsByRecency(undatedLeft, undatedRight) > 0);
+  assert.ok(compareJobsByRecency(
+    { ...undatedLeft, createdAt: "2026-08-29T00:00:00.000Z" },
+    { ...undatedRight, createdAt: "2026-08-29T00:00:01.000Z" },
+  ) > 0);
+
+  assert.equal(llmCompletionEndpoint("https://model.example/v1/"), "https://model.example/v1/chat/completions");
+  assert.equal(llmCompletionEndpoint("https://model.example/v1/chat/completions"), "https://model.example/v1/chat/completions");
+});
+
 test("actual listener conflicts return the friendly EADDRINUSE error", async () => {
   const blocker = createHttpServer((_request, response) => response.end("occupied"));
   await new Promise<void>((resolveListen) => blocker.listen(0, "127.0.0.1", resolveListen));
@@ -184,7 +256,7 @@ test("artifact stream read failures terminate only that response and leave the s
   const baseUrl = serverBaseUrl("127.0.0.1", server.address());
   try {
     await assert.rejects(async () => {
-      const response = await fetch(`${baseUrl}/artifact`);
+      const response = await fetch(`${baseUrl}/artifact`, { headers: { connection: "keep-alive" } });
       await response.arrayBuffer();
     });
     assert.equal(await (await fetch(`${baseUrl}/health`)).text(), "alive");
@@ -244,9 +316,10 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
   try {
     const emptyCurrent = await fetch(`${baseUrl}/api/current`);
     assert.equal(emptyCurrent.status, 200);
-    assert.deepEqual(await emptyCurrent.json(), { run: null });
+    assert.deepEqual(await emptyCurrent.json(), { run: null, job: null });
     assert.equal((await fetch(`${baseUrl}/api/sources/live-check`, { method: "POST", body: "consumed" })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "新能源" }) })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "😀".repeat(81) }) })).status, 200, "query limits count Unicode code points rather than UTF-16 units");
     assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: 1 }) })).status, 400);
 
     assert.equal((await fetch(`${baseUrl}/api/settings/llm`, { method: "POST", headers: { "content-type": "application/json" }, body: "{" })).status, 400);
@@ -290,7 +363,16 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
     });
     assert.equal(duplicateUploads.status, 400);
     assert.equal((await duplicateUploads.json() as { code: string }).code, "DUPLICATE_UPLOAD_ID");
+    const unicodeQuestion = await fetch(`${baseUrl}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ researchQuestion: "😀".repeat(121) }),
+    });
+    assert.equal(unicodeQuestion.status, 202, "research-question limits count Unicode code points rather than UTF-16 units");
+    const unicodeRunId = (await unicodeQuestion.json() as { runId: string }).runId;
+    assert.equal((await fetch(`${baseUrl}/api/runs/${unicodeRunId}/cancel`, { method: "POST" })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/runs/missing`)).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/runs/missing/cancel`, { method: "POST" })).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/missing/decisions`, { method: "POST" })).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/missing/source-update`, { method: "POST" })).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/missing/artifact-versions`)).status, 404);

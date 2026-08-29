@@ -78,6 +78,7 @@ export interface RunGoldenCaseOptions {
   publishCurrent?: boolean;
   onProgress?: (steps: RunStep[]) => void | Promise<void>;
   onToolEvent?: (event: ToolCallEvent) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export const MAX_RUN_SOURCES = MAX_SOURCES;
@@ -104,9 +105,25 @@ function finishStep(step: RunStep, output: unknown, summary: string) {
   step.summary = summary;
 }
 
+function abortableDelay(milliseconds: number, signal?: AbortSignal) {
+  return new Promise<void>((resolveDelay, rejectDelay) => {
+    const abort = () => {
+      clearTimeout(timer);
+      rejectDelay(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolveDelay();
+    }, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 async function publishProgress(options: RunGoldenCaseOptions, steps: RunStep[]) {
+  options.signal?.throwIfAborted();
   await options.onProgress?.(structuredClone(steps));
-  if ((options.stepDelayMs ?? 0) > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, options.stepDelayMs));
+  options.signal?.throwIfAborted();
+  if ((options.stepDelayMs ?? 0) > 0) await abortableDelay(options.stepDelayMs!, options.signal);
 }
 
 export function errorText(error: unknown) {
@@ -118,10 +135,12 @@ async function publishToolEvent(options: RunGoldenCaseOptions, event: ToolCallEv
 }
 
 async function recordTool<T>(options: RunGoldenCaseOptions, events: ToolCallEvent[], toolName: ToolCallEvent["toolName"], inputSummary: string, action: () => Promise<T>): Promise<T> {
+  options.signal?.throwIfAborted();
   const startedAt = isoNow();
   const started = performance.now();
   try {
     const output = await action();
+    options.signal?.throwIfAborted();
     const event: ToolCallEvent = { id: randomUUID(), kind: "TOOL_CALL", toolName, inputSummary, startedAt, status: "success", outputId: hashValue(output), duration: Math.round(performance.now() - started), error: null };
     events.push(event);
     await publishToolEvent(options, event);
@@ -277,6 +296,7 @@ function modelDataDisclosure(stages: Array<"PLAN" | "SYNTHESIZE">): NonNullable<
 }
 
 export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<ResearchRun> {
+  options.signal?.throwIfAborted();
   if ((options.uploadedFiles?.length ?? 0) > MAX_RUN_UPLOADS) {
     throw new Error(`SOURCE_LIMIT_EXCEEDED: a run accepts at most ${MAX_RUN_SOURCES} sources, including at most ${MAX_RUN_UPLOADS} uploaded files`);
   }
@@ -310,7 +330,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       liveConfig = config;
       const planContext = { question: options.researchQuestion, availableInputs: ["离线搜索快照", "本地 PDF", "市场 CSV", ...(options.uploadedFiles ?? []).map((file, index) => `用户上传 ${file.kind} 材料 ${index + 1}`)] };
       livePlanPromptSha256 = promptMessagesSha256(renderPlanMessages(planContext));
-      const drafts = await recordTool(options, events, "llm-planner", "模型提出研究计划；程序随后校验工具允许列表", () => draftPlanSteps(config, planContext));
+      const drafts = await recordTool(options, events, "llm-planner", "模型提出研究计划；程序随后校验工具允许列表", () => draftPlanSteps(config, planContext, 90_000, 1500, options.signal));
       const valid = validatePlanSteps(drafts, PLAN_TOOL_ALLOWLIST);
       if (!valid) throw new Error("LLM plan failed deterministic allowlist and workflow-anchor validation");
       plan = planFromDrafts(options.researchQuestion, valid);
@@ -392,7 +412,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       const config = liveConfig!;
       const synthesisContext = { question: options.researchQuestion, sources, evidence, data: seed.data };
       const synthesisPromptSha256 = promptMessagesSha256(renderConclusionMessages(synthesisContext));
-      const drafts = await recordTool(options, events, "llm-synthesizer", "单一端点模型提出候选（同一请求共享最多两次传输/解析尝试）", () => draftConclusions(config, synthesisContext));
+      const drafts = await recordTool(options, events, "llm-synthesizer", "单一端点模型提出候选（同一请求共享最多两次传输/解析尝试）", () => draftConclusions(config, synthesisContext, 90_000, 1500, options.signal));
       const triage = triageLlmDrafts(drafts, evidence.map((item) => item.id));
       const valid = triage.accepted;
       rejectedDrafts = triage.rejected;
