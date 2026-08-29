@@ -7,7 +7,7 @@ import test from "node:test";
 import JSZip from "jszip";
 
 import { runGoldenCase } from "../src/index.js";
-import { markdownReport, reportModel, writePdfReport } from "../src/tools/report-export.js";
+import { markdownReport, readableEvidence, readableReviewStatus, reportModel, writePdfReport } from "../src/tools/report-export.js";
 
 test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence snapshot", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-report-export-"));
@@ -72,6 +72,19 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
   assert.deepEqual(sparseModel.sections.find((section) => section.heading === "关键假设")?.items, ["本版本未记录显式假设。"]);
   assert.ok(sparseModel.sections.find((section) => section.heading === "证据与可追溯底稿")?.items.some((item) => item.includes("未提供定位")));
   assert.ok(sparseModel.sections.find((section) => section.heading === "证据与可追溯底稿")?.items.some((item) => item.includes("工作表 统计") && item.includes("单元格 A1:B2")));
+  assert.equal(readableEvidence(run, "missing-evidence"), "证据记录不存在。");
+  assert.equal(readableReviewStatus("CUSTOM_REVIEW"), "CUSTOM_REVIEW");
+
+  const fallbackRun = structuredClone(run);
+  fallbackRun.conclusions[0]!.evidenceStatus = "CUSTOM_EVIDENCE" as never;
+  const insufficient = fallbackRun.conclusions.find((item) => item.normalizedEvidenceStatus === "INSUFFICIENT_EVIDENCE")!;
+  insufficient.missingEvidence = [];
+  fallbackRun.assumptions[0]!.evidenceStatus = "CUSTOM_ASSUMPTION" as never;
+  fallbackRun.assumptions[0]!.owner = "CUSTOM_OWNER" as never;
+  const fallbackModel = reportModel(fallbackRun);
+  assert.ok(fallbackModel.sections.find((section) => section.heading === "核心发现")?.items.some((item) => item.includes("CUSTOM_EVIDENCE")));
+  assert.ok(fallbackModel.sections.find((section) => section.heading === "冲突与证据边界")?.items.some((item) => item.includes("可验证的直接证据")));
+  assert.ok(fallbackModel.sections.find((section) => section.heading === "关键假设")?.items.some((item) => item.includes("CUSTOM_ASSUMPTION") && item.includes("CUSTOM_OWNER")));
 
   const previousPath = process.env.PATH;
   process.env.PATH = "";

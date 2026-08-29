@@ -31,7 +31,7 @@
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
 | 五状态轨道（PLAN→COLLECT→SYNTHESIZE→AUDIT→DELIVER），每节点 pending/running/success/failed | `GET /api/runs/:id` 轮询（现有 `RunStep[]`）；模型阶段在 events 中以 `llm-planner`/`llm-synthesizer` 工具事件出现 | 每步输出哈希被下一步消费；失败传播不误报成功（现有测试覆盖） |
-| SSE 实时流（可选，轮询仍是当前前端基线） | `GET /api/runs/:id/events`；每 run 最多 4 路、全局 6 路，超限 429 `SSE_CAPACITY_EXCEEDED`；60 秒无 step/tool 后以 `stream-end {reason:"idle-timeout", reconnect:true}` 断流 | 断流只释放订阅资源，后台任务继续；客户端可回退轮询或重连 |
+| SSE 实时流（React 默认使用，错误时回退轮询） | `GET /api/runs/:id/events`；每 run 最多 4 路、全局 6 路，超限 429 `SSE_CAPACITY_EXCEEDED`；60 秒无 step/tool 后以 `stream-end {reason:"idle-timeout", reconnect:true}` 断流 | 断流只释放订阅资源，后台任务继续；客户端自动回退轮询 |
 | 每个工具调用的 inputSummary/时长/状态 | `run.events[]`（七字段完整） | 事件数 = 真实调用数，无装饰性条目 |
 | 信源读取明细（URL/PDF 页码/CSV 行号） | `run.sources[]` + `run.evidence[]` 定位字段 | 100% 引用可定位（现有 P0-04 测试） |
 

@@ -1,7 +1,7 @@
 # InsightForge 前端需求书
 
 - 版本：`DRAFT 1.3`
-- 状态：`ACTIVE HANDOFF — ABloom 负责实现与收口`
+- 状态：`IMPLEMENTED — ABloom React 工作台已完成主路径联调；以 E2E 与后端合同持续验收`
 - 适用入口：本地 Web 工作台 `/`
 - 目标桌面尺寸：评委笔记本 Chromium；不做移动端专项适配
 

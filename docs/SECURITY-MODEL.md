@@ -28,7 +28,7 @@
 - **DOM 与响应头**：CSP `default-src 'self'`、`referrer-policy: no-referrer`（测试断言）。
 - **成果文本转义**：交互界面继续使用 `textContent`；可下载 Markdown 对包括 `<`、`>` 在内的 Markdown/HTML 标点逐字符转义，来源中的 `<script>`、`<img onerror>` 只能作为文字保留，不能形成 raw HTML 标签。
 - **并发写完整性**：同一 runId 的人工决定与来源更新按队列串行化，防丢失更新（`src/server.ts:255` serializeRunMutation；并发测试证明 EDIT+update 双保留）。
-- **凭据卫生**：key 仅从环境变量或本地设置文件读取，源码/示例/测试零凭据字面量；仓库密钥扫描纳入 `npm run verify` 门禁（当前 170 个 tracked/untracked 且未忽略的文件通过）。
+- **凭据卫生**：key 仅从环境变量或本地设置文件读取，源码/示例/测试零凭据字面量；仓库全部 tracked/untracked 且未忽略文件均纳入 `npm run verify` 密钥扫描门禁。
 - **回环服务请求边界**：写请求必须携带进程内随机 request key；浏览器请求同时校验 loopback `Origin` 与 `Sec-Fetch-Site`，JSON 端点拒绝 safelisted `text/plain`。首页通过 CSP nonce 引导脚本为同源写请求自动加头，`GET /api/request-key` 不开放 CORS。`INSIGHTFORGE_DISABLE_REQUEST_KEY=1` 仅是明确标注为不安全的本地调试开关。
 - **运行资源边界**：同时最多两个五状态任务，超限 fail-closed 为 429；最近十个任务之外的 progress 与 run/artifact 目录成对淘汰，当前与执行中任务受保护。上传的 20 对象/32 MiB/24 小时边界独立执行，不能靠运行淘汰替代。
 - **SSE 资源边界**：每个 run 最多 4 个订阅、全局最多 6 个，超限返回 `429 SSE_CAPACITY_EXCEEDED`；60 秒没有新的 step/tool 业务事件即发送可重连的 `stream-end` 并清除 socket、心跳和 idle timer，不取消后台任务。
@@ -37,7 +37,7 @@
 
 ## 随机化验证
 
-安全与状态相关不变量由 `npm run fuzz` 持续验证（seed 可复现）：引擎 30 例、ResearchRun 结构 293,070 例、人工决定幂等性 1,000 例、LLM 推理预算 1,000 例、真实 HTTP API 5,000 例、Audit 104,000 例、上传 165,000 例、SSRF 125,000 例；合计 694,100 例，对 6,931 行生产 TypeScript 达到 100.14 例/行。SSRF 套件断言危险输入的出站 fetch 始终为零。
+安全与状态相关不变量由 `npm run fuzz` 持续验证（seed 可复现）：引擎 30 例、ResearchRun 结构 296,386 例、人工决定幂等性 1,000 例、LLM 推理预算 1,000 例、LLM 有界重试 10,000 例、拒绝候选留痕 30,000 例、来源更新依赖图 84 例、真实 HTTP API 5,000 例、Audit 104,000 例、上传 165,000 例、SSRF 125,000 例；合计 737,500 例，对 7,365 行生产 TypeScript 达到 100.14 例/行。SSRF 套件断言危险输入的出站 fetch 始终为零。
 
 ## 已知未验证边界（诚实声明）
 

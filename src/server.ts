@@ -99,7 +99,7 @@ export function enforceBrowserRequestBoundary(request: IncomingMessage, requestK
 }
 
 function requestKeyBootstrap(requestKey: string, nonce: string) {
-  return `<script nonce="${nonce}">(()=>{const k=${JSON.stringify(requestKey)},f=globalThis.fetch.bind(globalThis),p=r=>{const t=r.headers.get('content-type')||'';if(t.includes('application/json'))void r.clone().json().then(b=>{const x=b&&b.run,e=document.querySelector('.offline-pill');if(x&&typeof x.offlineModeLabel==='string'&&e){const d=document.createElement('i');e.replaceChildren(d,document.createTextNode(' '+x.offlineModeLabel));e.dataset.mode=x.offlineMode?'offline':'live'}}).catch(()=>{});return r};globalThis.fetch=(i,n={})=>{const m=String(n.method||(i instanceof Request?i.method:"GET")).toUpperCase(),u=new URL(i instanceof Request?i.url:String(i),location.href);if(u.origin===location.origin&&!['GET','HEAD','OPTIONS'].includes(m)){const h=new Headers(i instanceof Request?i.headers:undefined);new Headers(n.headers).forEach((v,x)=>h.set(x,v));h.set('${REQUEST_KEY_HEADER}',k);return f(i,{...n,headers:h}).then(p)}return f(i,n).then(p)}})();</script>`;
+  return `<script nonce="${nonce}">(()=>{const k=${JSON.stringify(requestKey)},f=globalThis.fetch.bind(globalThis);globalThis.fetch=(i,n={})=>{const m=String(n.method||(i instanceof Request?i.method:"GET")).toUpperCase(),u=new URL(i instanceof Request?i.url:String(i),location.href);if(u.origin===location.origin&&!['GET','HEAD','OPTIONS'].includes(m)){const h=new Headers(i instanceof Request?i.headers:undefined);new Headers(n.headers).forEach((v,x)=>h.set(x,v));h.set('${REQUEST_KEY_HEADER}',k);return f(i,{...n,headers:h})}return f(i,n)}})();</script>`;
 }
 
 interface Job {
@@ -239,7 +239,7 @@ export async function resolveLoopbackBindHost(
 }
 
 const API_ROUTE_METHODS: Array<{ pattern: RegExp; methods: readonly string[] }> = [
-  { pattern: /^\/api\/(?:health|presets|request-key|current)$/u, methods: ["GET"] },
+  { pattern: /^\/api\/(?:health|csrf|presets|request-key|current)$/u, methods: ["GET"] },
   { pattern: /^\/api\/settings\/llm$/u, methods: ["GET", "POST"] },
   { pattern: /^\/api\/uploads$/u, methods: ["POST"] },
   { pattern: /^\/api\/uploads\/[0-9a-f-]+$/iu, methods: ["GET"] },
@@ -406,6 +406,13 @@ export function contentType(path: string) {
   if (extension === ".html") return "text/html; charset=utf-8";
   if (extension === ".css") return "text/css; charset=utf-8";
   if (extension === ".js") return "text/javascript; charset=utf-8";
+  if (extension === ".woff2") return "font/woff2";
+  if (extension === ".woff") return "font/woff";
+  if (extension === ".svg") return "image/svg+xml";
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".ico") return "image/x-icon";
   if (extension === ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   if (extension === ".pdf") return "application/pdf";
   if (extension === ".md") return "text/markdown; charset=utf-8";
@@ -472,13 +479,16 @@ export function resolveServerPaths(root?: string, moduleUrl = import.meta.url) {
 }
 
 export async function assertRuntimeAssets(publicDir: string, fixtureDir: string) {
+  const indexPath = join(publicDir, "index.html");
   const requiredFiles = [
-    join(publicDir, "index.html"),
-    join(publicDir, "app.js"),
-    join(publicDir, "styles.css"),
+    indexPath,
     ...["search-index.json", "market-brief.pdf", "market_v1.csv", "market_v2.csv", "model-cache-manifest.json", "model-plan-cache.json", "model-plan-prompt.txt", "model-synthesis-cache.json", "model-synthesis-prompt.txt"].map((name) => join(fixtureDir, name)),
   ];
   try {
+    const index = await readFile(indexPath, "utf8");
+    for (const match of index.matchAll(/\b(?:src|href)=["'](\/[^"'#?]+)["']/gu)) {
+      requiredFiles.push(staticFilePath(publicDir, match[1]!));
+    }
     const entries = await Promise.all(requiredFiles.map((path) => stat(path)));
     if (entries.some((entry) => !entry.isFile())) throw new Error("not a regular file");
   } catch (error) {
@@ -725,6 +735,10 @@ export function createInsightForgeServer(options: ServerOptions) {
         sendJson(response, 200, { ok: true, offlineDemo: true, defaultSynthesisMode: "CACHED_MODEL_OUTPUT" });
         return;
       }
+      if (method === "GET" && url.pathname === "/api/csrf") {
+        sendJson(response, 200, { token: null, required: false });
+        return;
+      }
       if (method === "GET" && url.pathname === "/api/presets") {
         sendJson(response, 200, researchPresets);
         return;
@@ -734,11 +748,7 @@ export function createInsightForgeServer(options: ServerOptions) {
         return;
       }
       if (method === "GET" && url.pathname === "/api/current") {
-        if (!currentRun) {
-          sendJson(response, 404, { error: "No research run exists yet" });
-          return;
-        }
-        sendJson(response, 200, { run: publicRun(currentRun) });
+        sendJson(response, 200, { run: currentRun ? publicRun(currentRun) : null });
         return;
       }
       if (method === "GET" && url.pathname === "/api/settings/llm") {
@@ -1008,7 +1018,7 @@ export function createInsightForgeServer(options: ServerOptions) {
           let scriptPolicy = "script-src 'self'";
           if (extname(filePath).toLowerCase() === ".html" && !requestKeyProtectionDisabled) {
             const nonce = randomUUID();
-            const html = file.toString("utf8").replace("</head>", `${requestKeyBootstrap(requestKey, nonce)}\n  </head>`);
+            const html = file.toString("utf8").replace(/<head([^>]*)>/u, `<head$1>\n    ${requestKeyBootstrap(requestKey, nonce)}`);
             file = Buffer.from(html, "utf8");
             scriptPolicy = `script-src 'self' 'nonce-${nonce}'`;
           }

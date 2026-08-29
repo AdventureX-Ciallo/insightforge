@@ -4,25 +4,24 @@
 
 ## 基线与变更边界
 
-- 本文件所在提交基于远端 `f11f97e19c5808d2111659aaec28a294f3ff828c` 完成 rebase 与全量复验。
-- 当前是本地隔离 worktree；本轮获授权直接提交并推送 `main`。
-- 未创建 PR、打 Tag、部署、迁移数据库、修改线上配置或操作真实用户数据。
-- 本轮不修改 ABloom 负责的 `public/`。
+- 当前集成基于 ABloom 前端 PR #51 的合并提交 `a79a54424a31da3b318e3d1c8467e58311e25ced`，在隔离 worktree 完成后端运行时适配与全量复验。
+- 前端交互与视觉保持 PR #51 版本；后端适配其 API、SSE、同源写边界、静态资源和空状态恢复合同。
+- 未打 Tag、部署、迁移数据库、修改线上配置或操作真实用户数据。
 
 ## 自动门禁
 
 2026-08-29 在当前工作树执行的最新门禁：
 
 ```text
-npm run verify                 PASS; 163/163; four coverage metrics 100%; build; 175-file secret scan; contract 23/23; fuzz 694,100
-npm run test:e2e               PASS; 1/1 Chromium; 7.9 s; test body 3.7 s
+npm run verify                 PASS; 188/188; four coverage metrics 100%; React+backend build; secret scan; contract 24/24; fuzz 737,500
+npm run test:e2e               PASS; 1/1 Chromium; full React workbench path; 23.1 s; test body 14.5 s
 npm run demo:triple            PASS; 3/3; 88/20/16 ms
 npm run smoke                  PASS
 npm ls --all                   PASS
 npm audit --audit-level=low    PASS; 0 vulnerabilities
 ```
 
-加入本审计文档后已重跑完整 `npm run verify`；当前 175 个 tracked/untracked 且未忽略的文件在 aggregate gate 内通过密钥扫描。
+加入本审计文档后已重跑完整 `npm run verify`；当前 tracked/untracked 且未忽略的源码与文档在 aggregate gate 内通过密钥扫描。
 
 收口前旧源码包曾在无 `.git`、无依赖、无构建和无运行状态的全新解包目录通过当时的 36/36 门禁；该记录只证明旧包，不证明当前工作树。当前实现按所有者要求尚未重新打包，最终源码包必须在前端冻结后生成并在两个全新解包目录重跑；SHA-256 和基线应保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。详细结果见 `docs/TEST-RESULTS.md`。
 
@@ -70,6 +69,5 @@ HTTP 测试发送真实 PDF/CSV/XLSX/TXT 字节。服务端校验扩展名、MIM
 
 ## 外部阻断
 
-- 当前前端尚未完成上传 ID→运行、编辑/确认分离、确认理由/范围及成果历史展示。
 - 仓库不含在线模型密钥；现场默认使用明确标记且摘要锁定的缓存输出。
 - 公开部署没有目标和授权，未执行；当前 loopback 单用户服务也不应直接暴露到不可信网络。

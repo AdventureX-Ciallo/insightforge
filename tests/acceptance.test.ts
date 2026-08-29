@@ -78,7 +78,7 @@ test("audit covers all six gates, repairs once, and exports editable PPTX plus e
   const slideXml = (await Promise.all(slideFiles.map((name) => zip.file(name)?.async("text")))).join("\n");
   assert.match(slideXml, /<a:t>/);
   assert.match(slideXml, /PROOF OF INSIGHT/);
-  assert.match(slideXml, /INSUFFICIENT_EVIDENCE/);
+  assert.match(slideXml, /证据不足/u);
   for (const requiredPart of ["ppt/presProps.xml", "ppt/viewProps.xml", "ppt/tableStyles.xml"]) {
     assert.ok(zip.file(requiredPart), `PowerPoint package contains ${requiredPart}`);
   }
