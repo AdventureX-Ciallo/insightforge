@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import JSZip from "jszip";
 
 import type { ResearchRun } from "../domain.js";
+import { narrativeText, readableReviewStatus } from "./report-export.js";
 
 const EMU = 914400;
 const C = { navy: "122033", cyan: "22C3A6", amber: "F5B942", red: "E85D75", white: "FFFFFF", mist: "EEF4F7", slate: "566579", line: "D8E1E7" };
@@ -73,9 +74,9 @@ function buildSlides(run: ResearchRun) {
     const y = conclusionStartY + index * conclusionPitch;
     const color = conclusion.evidenceStatus === "INSUFFICIENT_EVIDENCE" ? C.red : conclusion.evidenceStatus === "CONFLICT" ? C.amber : C.cyan;
     conclusions.text(String(index + 1).padStart(2, "0"), 0.72, y, 0.45, 0.35, { size: 16, color, bold: true });
-    conclusions.text(conclusion.text, 1.35, y - 0.03, 9.35, conclusionTextHeight, { size: compactConclusions ? 12 : 14, bold: true, valign: "t" });
+    conclusions.text(narrativeText(conclusion.text), 1.35, y - 0.03, 9.35, conclusionTextHeight, { size: compactConclusions ? 12 : 14, bold: true, valign: "t" });
     conclusions.rect(10.92, y, 1.65, 0.34, color, color, true);
-    conclusions.text(conclusion.reviewStatus, 10.98, y + 0.02, 1.53, 0.25, { size: 8, color: C.white, bold: true, align: "ctr" });
+    conclusions.text(readableReviewStatus(conclusion.reviewStatus), 10.98, y + 0.02, 1.53, 0.25, { size: 8, color: C.white, bold: true, align: "ctr" });
     conclusions.text(conclusion.sourceIds.map((sourceId) => `[S${run.sources.findIndex((source) => source.id === sourceId) + 1}]`).join(" "), 1.35, y + conclusionSourceOffset, 2.4, conclusionSourceHeight, { size: 8, color: C.slate });
     if (index < run.conclusions.length - 1) conclusions.rect(1.35, y + conclusionDividerOffset, 11.1, 0.008, C.line);
   });
@@ -88,25 +89,25 @@ function buildSlides(run: ResearchRun) {
   data.rect(0.75, 1.65, 5.75, 3.5, C.mist, "D5E2E8", true);
   data.text(calculation ? `${calculation.value.toFixed(1)}%` : "数据缺失", 1.15, 2.0, 4.7, 0.8, { size: 38, bold: true, align: "ctr" });
   data.text(run.sourceVersion === "v1" ? "2024 新能源汽车份额（预测输入）" : "2024 新能源汽车新车销量占比（最终）", 1.15, 2.9, 4.7, 0.34, { size: 15, color: C.slate, bold: true, align: "ctr" });
-  data.text(calculation ? `${calculation.formula}\n输入：${calculation.inputs.map((input) => `${input.label}=${input.value}${input.unit}`).join("；")}` : "缺少计算公式与输入，禁止展示伪造数值。", 1.12, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
+  data.text(calculation ? `新能源汽车销量 ÷ 汽车总销量 × 100\n输入：${calculation.inputs.map((input) => `${input.label}=${input.value}${input.unit}`).join("；")}` : "缺少计算公式与输入，禁止展示伪造数值。", 1.12, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
   data.rect(6.85, 1.65, 5.75, 3.5, "FFF7E5", "F4DCA4", true);
   data.text(estimate ? `${estimate.value.toFixed(2)} 百万` : "估算缺失", 7.25, 2.0, 4.7, 0.8, { size: 34, bold: true, align: "ctr" });
   data.text("风险调整后可有效服务充电点（估算）", 7.25, 2.9, 4.7, 0.34, { size: 14, color: C.slate, bold: true, align: "ctr" });
-  data.text(estimate ? `${estimate.formula}\n假设：${estimate.assumptions.join("；")}` : "缺少估算公式或假设，禁止展示伪造数值。", 7.22, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
+  data.text(estimate ? `公共充电桩数量 ×（1－利用率缺口假设）\n假设：${estimate.assumptions.map((id) => narrativeText(run.assumptions.find((item) => item.id === id)?.text ?? id)).join("；")}` : "缺少估算公式或假设，禁止展示伪造数值。", 7.22, 3.55, 4.82, 1.0, { size: 11, color: C.slate, valign: "t" });
   data.text(`计算来源：market_${run.sourceVersion}.csv｜中汽协与中国充电联盟公开资料的结构化离线摘录`, 0.8, 5.65, 11.7, 0.35, { size: 11, color: C.slate });
   slides.push(data);
 
   const boundary = new SlideBuilder(C.white);
   boundary.header("Boundaries", "冲突、假设与证据不足", 4);
   boundary.text("来源冲突", 0.8, 1.65, 3.8, 0.4, { size: 20, color: C.amber, bold: true });
-  boundary.text(run.conflicts[0]?.explanation ?? "无", 0.8, 2.15, 5.65, 1.35, { size: 14, valign: "t" });
-  boundary.text("CANDIDATE_EXPLANATION\n保留双方数值，不静默取值，不求平均。", 0.8, 3.7, 5.65, 0.8, { size: 11, color: C.slate, bold: true, valign: "t" });
+  boundary.text(narrativeText(run.conflicts[0]?.explanation ?? "无"), 0.8, 2.15, 5.65, 1.35, { size: 14, valign: "t" });
+  boundary.text("候选解释\n保留双方数值，不静默取值，不求平均。", 0.8, 3.7, 5.65, 0.8, { size: 11, color: C.slate, bold: true, valign: "t" });
   boundary.rect(6.66, 1.62, 0.012, 4.7, C.line);
   boundary.text("证据不足", 7.05, 1.65, 3.8, 0.4, { size: 20, color: C.red, bold: true });
   const insufficient = run.conclusions.find((item) => item.evidenceStatus === "INSUFFICIENT_EVIDENCE");
-  boundary.text(insufficient?.text ?? "无", 7.05, 2.15, 5.3, 1.35, { size: 14, valign: "t" });
+  boundary.text(narrativeText(insufficient?.text ?? "无"), 7.05, 2.15, 5.3, 1.35, { size: 14, valign: "t" });
   boundary.rect(7.05, 3.65, 2.45, 0.36, C.red, C.red, true);
-  boundary.text("INSUFFICIENT_EVIDENCE", 7.13, 3.7, 2.29, 0.23, { size: 8, color: C.white, bold: true, align: "ctr" });
+  boundary.text("证据不足", 7.13, 3.7, 2.29, 0.23, { size: 8, color: C.white, bold: true, align: "ctr" });
   boundary.text(`缺少：${insufficient?.missingEvidence.join("；") ?? "无"}`, 7.05, 4.23, 5.3, 0.76, { size: 11, color: C.red, bold: true, valign: "t" });
   boundary.text("状态保留在报告、PPTX 与 JSON；禁止自动确认。", 7.05, 5.25, 5.3, 0.42, { size: 11, color: C.slate });
   slides.push(boundary);

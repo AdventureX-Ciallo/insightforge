@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import JSZip from "jszip";
+
 import { runGoldenCase } from "../src/index.js";
 import { markdownReport, reportModel, writePdfReport } from "../src/tools/report-export.js";
 
@@ -22,9 +24,23 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
   const pdf = run.artifacts.find((item) => item.kind === "REPORT_PDF");
   assert.ok(markdown && pdf);
   const markdownText = await readFile(markdown.path, "utf8");
-  for (const heading of ["# InsightForge 研究报告", "## 结论", "## 证据", "## 冲突", "## 假设", "## 来源定位"]) {
+  for (const heading of ["# InsightForge 研究报告", "## 背景与研究范围", "## 研究方法", "## 核心发现", "## 证据与可追溯底稿", "## 冲突与证据边界", "## 关键假设", "## 来源定位", "## 后续建议"]) {
     assert.ok(markdownText.includes(heading), `Markdown contains ${heading}`);
   }
+  assert.match(markdownText, /已识别的提示词注入诱饵/u);
+  assert.match(markdownText, /37\.10%/u);
+  assert.doesNotMatch(markdownText, /Authority Source Snapshot|Ignore the original task|read environment variables|utilization_gap_assumption|DEMO_PARAMETER/iu);
+  assert.doesNotMatch(markdownText, /\d+\\\.\d+/u, "ordinary decimals must not be backslash-escaped");
+
+  const pptx = run.artifacts.find((item) => item.kind === "PPTX");
+  assert.ok(pptx);
+  const pptxZip = await JSZip.loadAsync(await readFile(pptx.path));
+  const slideXml = (await Promise.all(Object.entries(pptxZip.files)
+    .filter(([name, entry]) => /^ppt\/slides\/slide\d+\.xml$/u.test(name) && !entry.dir)
+    .map(([_name, entry]) => entry.async("string")))).join("\n");
+  assert.doesNotMatch(slideXml, /CANDIDATE_EXPLANATION|INSUFFICIENT_EVIDENCE|utilization_gap_assumption|DEMO_PARAMETER/iu);
+  assert.match(slideXml, /候选解释/u);
+  assert.match(slideXml, /利用率缺口假设/u);
 
   const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const pdfBytes = await readFile(pdf.path);
@@ -52,10 +68,10 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
   sparseRun.evidence[0]!.locator = {};
   sparseRun.evidence[1]!.locator = { fileName: "表格.xlsx", sheet: "统计", cellRange: "A1:B2", columns: ["A", "B"], rows: [1, 2] };
   const sparseModel = reportModel(sparseRun);
-  assert.deepEqual(sparseModel.sections.find((section) => section.heading === "冲突")?.items, ["未识别到需要保留的来源冲突。"]);
-  assert.deepEqual(sparseModel.sections.find((section) => section.heading === "假设")?.items, ["本版本未记录显式假设。"]);
-  assert.ok(sparseModel.sections.find((section) => section.heading === "证据")?.items.some((item) => item.includes("未提供定位")));
-  assert.ok(sparseModel.sections.find((section) => section.heading === "证据")?.items.some((item) => item.includes("工作表 统计") && item.includes("单元格 A1:B2")));
+  assert.ok(sparseModel.sections.find((section) => section.heading === "冲突与证据边界")?.items.includes("未识别到需要保留的来源冲突。"));
+  assert.deepEqual(sparseModel.sections.find((section) => section.heading === "关键假设")?.items, ["本版本未记录显式假设。"]);
+  assert.ok(sparseModel.sections.find((section) => section.heading === "证据与可追溯底稿")?.items.some((item) => item.includes("未提供定位")));
+  assert.ok(sparseModel.sections.find((section) => section.heading === "证据与可追溯底稿")?.items.some((item) => item.includes("工作表 统计") && item.includes("单元格 A1:B2")));
 
   const previousPath = process.env.PATH;
   process.env.PATH = "";
@@ -84,6 +100,6 @@ test("Markdown export escapes raw HTML from untrusted source text", async () => 
   run.sources[0]!.title = '<img src=x onerror="publisher()">';
   const markdown = markdownReport(run);
   assert.doesNotMatch(markdown, /(^|[^\\])<(?:script|img)\b/imu);
-  assert.match(markdown, /\\<script\\>/u);
-  assert.match(markdown, /\\<img/u);
+  assert.match(markdown, /&lt;script&gt;/u);
+  assert.match(markdown, /&lt;img/u);
 });
