@@ -216,13 +216,15 @@ try {
     const expectedStates = ["PLAN", "COLLECT", "SYNTHESIZE", "AUDIT", "DELIVER"];
     requireContract(run.steps.every((step, index) => step.state === expectedStates[index] && step.status === "success" && /^[a-f0-9]{64}$/u.test(step.outputId)), "five-state output contract mismatch", run.steps);
     requireContract(run.steps[0].consumedOutputIds.length === 0 && run.steps.slice(1).every((step, index) => step.consumedOutputIds.length === 1 && step.consumedOutputIds[0] === run.steps[index].outputId), "step output consumption chain mismatch", run.steps);
-    return { runId, status: body.job.status, terminalStatus: run.terminalStatus, steps: run.steps.map((step) => `${step.state}:${step.status}`), toolNames: run.events.map((event) => event.toolName), uploadedFileIds: run.uploadedFileIds, synthesisOutputId: synthesizeStep.outputId };
+    requireContract(Array.isArray(run.rejectedDrafts) && Number.isSafeInteger(run.rejectedDraftOverflowCount) && Array.isArray(run.synthesisOutput?.rejectedDrafts), "rejected-draft triage contract is missing", { rejectedDrafts: run.rejectedDrafts, rejectedDraftOverflowCount: run.rejectedDraftOverflowCount, synthesisOutput: run.synthesisOutput });
+    return { runId, status: body.job.status, terminalStatus: run.terminalStatus, steps: run.steps.map((step) => `${step.state}:${step.status}`), toolNames: run.events.map((event) => event.toolName), uploadedFileIds: run.uploadedFileIds, synthesisOutputId: synthesizeStep.outputId, rejectedDraftCount: run.rejectedDrafts.length };
   });
 
   await check("current-run", "GET", "/api/current", async () => {
     const body = await jsonRequest("/api/current");
     requireContract(body.run?.id === runId, "current run does not match created run", { expectedRunId: runId, actualRunId: body.run?.id });
-    return { runId: body.run.id, terminalStatus: body.run.terminalStatus };
+    requireContract(Array.isArray(body.run.rejectedDrafts) && Number.isSafeInteger(body.run.rejectedDraftOverflowCount), "current run omitted rejected-draft triage", body.run);
+    return { runId: body.run.id, terminalStatus: body.run.terminalStatus, rejectedDraftCount: body.run.rejectedDrafts.length };
   });
 
   await check("boundary-questions", "GET", "/api/runs/:id/boundary-questions", async () => {
@@ -280,13 +282,13 @@ try {
 
   await check("artifact-versions", "GET", "/api/runs/:id/artifact-versions", async () => {
     const body = await jsonRequest(`/api/runs/${runId}/artifact-versions`);
-    requireContract(Array.isArray(body) && body.length >= 4 && body.every((version) => version.artifacts?.length === 4 && version.sources?.length > 0 && version.adjustmentNote), "artifact version list contract mismatch", body);
+    requireContract(Array.isArray(body) && body.length >= 4 && body.every((version) => version.artifacts?.length === 4 && version.sources?.length > 0 && version.adjustmentNote && Array.isArray(version.rejectedDrafts) && Number.isSafeInteger(version.rejectedDraftOverflowCount)), "artifact version list contract mismatch", body);
     return { count: body.length, versions: body.map((version) => ({ version: version.version, trigger: version.trigger, artifactCount: version.artifacts.length, status: version.status })) };
   });
 
   await check("artifact-version-detail", "GET", "/api/runs/:id/artifact-versions/1", async () => {
     const body = await jsonRequest(`/api/runs/${runId}/artifact-versions/1`);
-    requireContract(body.version === 1 && body.trigger === "initial" && body.artifacts?.length === 4 && body.sources?.length > 0 && body.conclusions?.length >= 3, "artifact version detail contract mismatch", body);
+    requireContract(body.version === 1 && body.trigger === "initial" && body.artifacts?.length === 4 && body.sources?.length > 0 && body.conclusions?.length >= 3 && Array.isArray(body.rejectedDrafts) && Number.isSafeInteger(body.rejectedDraftOverflowCount), "artifact version detail contract mismatch", body);
     return { version: body.version, trigger: body.trigger, artifactCount: body.artifacts.length, sourceCount: body.sources.length, conclusionCount: body.conclusions.length };
   });
 
@@ -307,6 +309,7 @@ try {
         const parsed = JSON.parse(new TextDecoder().decode(bytes));
         const artifactKinds = [...new Set(parsed.artifacts?.map((item) => item.kind) || [])].sort();
         requireContract(parsed.researchQuestion && parsed.sources?.length > 0 && parsed.artifacts?.length >= 4 && ["EVIDENCE_JSON", "PPTX", "REPORT_MD", "REPORT_PDF"].every((kind) => artifactKinds.includes(kind)), "evidence package JSON contract mismatch", { keys: Object.keys(parsed), artifactCount: parsed.artifacts?.length, artifactKinds });
+        requireContract(Array.isArray(parsed.rejectedDrafts) && Number.isSafeInteger(parsed.rejectedDraftOverflowCount), "evidence package omitted rejected-draft triage", { rejectedDrafts: parsed.rejectedDrafts, rejectedDraftOverflowCount: parsed.rejectedDraftOverflowCount });
       }
       return { kind: expected.kind, contentType: response.headers.get("content-type"), sizeBytes: bytes.byteLength, sha256 };
     });

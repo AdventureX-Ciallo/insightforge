@@ -85,6 +85,15 @@ test("HTTP entrypoint runs, persists, reviews, updates, and downloads real artif
     assert.equal(new TextDecoder().decode(originalBytes.slice(0, 2)), "PK");
     assert.notDeepEqual(originalBytes, bytes, "the immutable v1 deck remains downloadable and differs from current");
 
+    const persistedRun = JSON.parse(await readFile(join(workspaceDir, runId, "run.json"), "utf8")) as {
+      artifacts: Array<{ kind: string; path: string }>;
+    };
+    const evidencePackagePath = persistedRun.artifacts.find((item) => item.kind === "EVIDENCE_JSON")!.path;
+    await writeFile(evidencePackagePath, "tampered evidence package", "utf8");
+    const tamperedArtifact = await fetch(`${baseUrl}/api/runs/${runId}/artifacts/EVIDENCE_JSON`);
+    assert.equal(tamperedArtifact.status, 409);
+    assert.match((await tamperedArtifact.json() as { error: string }).error, /integrity/u);
+
     const traversal = await fetch(`${baseUrl}/../../../../etc/passwd`);
     assert.equal(traversal.status, 404);
   } finally {

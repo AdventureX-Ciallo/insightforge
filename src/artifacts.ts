@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import {
   evidencePackageSchema,
@@ -36,6 +36,8 @@ function packageFor(run: ResearchRun) {
     evidenceGaps: run.evidenceGaps,
     conclusions: run.conclusions,
     candidateRevisions: run.candidateRevisions,
+    rejectedDrafts: run.rejectedDrafts,
+    rejectedDraftOverflowCount: run.rejectedDraftOverflowCount,
     auditFindings: run.auditFindings,
     humanDecisions: run.humanDecisions,
     artifactVersions: run.artifactVersions,
@@ -82,6 +84,8 @@ export async function writeArtifactVersion(
     sources: structuredClone(run.sources),
     evidence: structuredClone(run.evidence),
     conclusions: structuredClone(run.conclusions),
+    rejectedDrafts: structuredClone(run.rejectedDrafts),
+    rejectedDraftOverflowCount: run.rejectedDraftOverflowCount,
     status: "CURRENT",
     supersedesId: previous?.id ?? null,
   };
@@ -117,6 +121,21 @@ export async function persistRun(run: ResearchRun, workspaceDir: string, updateC
   await mkdir(runDir, { recursive: true });
   await atomicWriteJson(join(runDir, "run.json"), run);
   if (updateCurrent) await atomicWriteJson(join(resolve(workspaceDir), "current.json"), run);
+  const artifactsDir = join(runDir, "artifacts");
+  let entries;
+  try {
+    entries = await readdir(artifactsDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const retained = new Set(run.artifactVersions.map((version) => `v${version.version}`));
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^v[1-9]\d*$/u.test(entry.name) || retained.has(entry.name)) continue;
+    const evictedDir = join(artifactsDir, entry.name);
+    assertInside(workspaceDir, evictedDir);
+    await rm(evictedDir, { recursive: true, force: true });
+  }
 }
 
 export class PersistedRunRecoveryError extends Error {

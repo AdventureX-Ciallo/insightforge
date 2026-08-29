@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 
-import type { Datum, Evidence, ResearchSource } from "./domain.js";
+import {
+  MAX_REJECTED_DRAFTS,
+  MAX_REJECTED_DRAFT_EVIDENCE_IDS,
+  MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH,
+  MAX_REJECTED_DRAFT_TEXT_LENGTH,
+} from "./domain.js";
+import type { Datum, Evidence, LlmDraftDropReason, RejectedDraft, ResearchSource } from "./domain.js";
+import { hashValue } from "./hash.js";
+import { readResponseBytesLimited } from "./tools/limited-response.js";
 
 export interface LlmConfig {
   baseUrl: string;
@@ -22,6 +30,8 @@ export const MAX_LLM_DRAFT_AUXILIARY_LENGTH = 500;
 export const MAX_LLM_DRAFT_AUXILIARY_ITEMS = 10;
 export const MAX_LLM_DRAFT_EVIDENCE_IDS = 20;
 export const MAX_LLM_PLAN_FIELD_LENGTH = 500;
+export const MAX_LLM_RESPONSE_BYTES = 1024 * 1024;
+export const MAX_LLM_DRAFT_CANDIDATES = 1000;
 
 export function isValidLlmTokenBudget(value: unknown): value is number {
   return typeof value === "number"
@@ -50,6 +60,22 @@ export interface LlmDraft {
   evidenceIds: string[];
   assumptions: string[];
   missingEvidence: string[];
+}
+
+export type RejectedLlmDraft = RejectedDraft;
+
+export interface LlmDraftTriage {
+  accepted: LlmDraft[];
+  rejected: RejectedDraft[];
+  rejectedOverflowCount: number;
+}
+
+function codePointLength(value: string) {
+  return Array.from(value).length;
+}
+
+function truncateCodePoints(value: string, maxLength: number) {
+  return Array.from(value).slice(0, maxLength).join("");
 }
 
 export function resolveLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
@@ -228,6 +254,16 @@ export function promptMessagesSha256(messages: readonly LlmPromptMessage[]) {
 class NonRetryableLlmError extends Error {}
 class RetryableLlmOutputError extends Error {}
 
+function redactSensitiveContent(content: string, sensitiveValues: readonly string[]) {
+  let redacted = content;
+  for (const value of sensitiveValues) {
+    if (!value) continue;
+    const jsonEscaped = JSON.stringify(value).slice(1, -1);
+    redacted = redacted.replaceAll(jsonEscaped, "[REDACTED]").replaceAll(value, "[REDACTED]");
+  }
+  return redacted;
+}
+
 function parseChatCompletionContent(payload: ChatCompletionResponse): unknown {
   const choice = payload.choices?.[0];
   if (choice?.finish_reason === "length") {
@@ -244,23 +280,24 @@ function parseChatCompletionContent(payload: ChatCompletionResponse): unknown {
   }
 }
 
-function parseConclusionDrafts(parsed: unknown): LlmDraft[] {
+function parseConclusionDrafts(parsed: unknown, sensitiveValues: readonly string[] = []): LlmDraft[] {
   const conclusions = parsed && typeof parsed === "object"
     ? (parsed as { conclusions?: unknown }).conclusions
     : undefined;
   if (!Array.isArray(conclusions)) throw new RetryableLlmOutputError("LLM response is missing the conclusions array");
+  if (conclusions.length > MAX_LLM_DRAFT_CANDIDATES) throw new RetryableLlmOutputError("LLM response contains too many conclusion drafts");
   return conclusions.map((item) => {
     const draft = item && typeof item === "object" ? item as Partial<LlmDraft> : {};
     return {
-      text: typeof draft.text === "string" ? draft.text.trim() : "",
-      evidenceIds: Array.isArray(draft.evidenceIds) ? draft.evidenceIds.filter((id): id is string => typeof id === "string") : [],
-      assumptions: Array.isArray(draft.assumptions) ? draft.assumptions.filter((value): value is string => typeof value === "string") : [],
-      missingEvidence: Array.isArray(draft.missingEvidence) ? draft.missingEvidence.filter((value): value is string => typeof value === "string") : [],
+      text: typeof draft.text === "string" ? redactSensitiveContent(draft.text.trim(), sensitiveValues) : "",
+      evidenceIds: Array.isArray(draft.evidenceIds) ? draft.evidenceIds.filter((id): id is string => typeof id === "string").map((id) => redactSensitiveContent(id, sensitiveValues)) : [],
+      assumptions: Array.isArray(draft.assumptions) ? draft.assumptions.filter((value): value is string => typeof value === "string").map((value) => redactSensitiveContent(value, sensitiveValues)) : [],
+      missingEvidence: Array.isArray(draft.missingEvidence) ? draft.missingEvidence.filter((value): value is string => typeof value === "string").map((value) => redactSensitiveContent(value, sensitiveValues)) : [],
     };
   });
 }
 
-function parsePlanDrafts(parsed: unknown): PlanStepDraft[] {
+function parsePlanDrafts(parsed: unknown, sensitiveValues: readonly string[] = []): PlanStepDraft[] {
   const steps = parsed && typeof parsed === "object"
     ? (parsed as { steps?: unknown }).steps
     : undefined;
@@ -268,9 +305,9 @@ function parsePlanDrafts(parsed: unknown): PlanStepDraft[] {
   return steps.map((item) => {
     const draft = item && typeof item === "object" ? item as Partial<PlanStepDraft> : {};
     return {
-      objective: typeof draft.objective === "string" ? draft.objective.trim() : "",
-      toolName: typeof draft.toolName === "string" ? draft.toolName.trim() : "",
-      expectedOutput: typeof draft.expectedOutput === "string" ? draft.expectedOutput.trim() : "",
+      objective: typeof draft.objective === "string" ? redactSensitiveContent(draft.objective.trim(), sensitiveValues) : "",
+      toolName: typeof draft.toolName === "string" ? redactSensitiveContent(draft.toolName.trim(), sensitiveValues) : "",
+      expectedOutput: typeof draft.expectedOutput === "string" ? redactSensitiveContent(draft.expectedOutput.trim(), sensitiveValues) : "",
     };
   });
 }
@@ -300,8 +337,12 @@ async function postChatCompletion<T>(config: LlmConfig, body: unknown, parse: (v
       if (response.ok) {
         let payload: ChatCompletionResponse;
         try {
-          payload = (await response.json()) as ChatCompletionResponse;
-        } catch {
+          const bytes = await readResponseBytesLimited(response, MAX_LLM_RESPONSE_BYTES, "LLM response exceeds safety limit");
+          payload = JSON.parse(new TextDecoder().decode(bytes)) as ChatCompletionResponse;
+        } catch (error) {
+          if (error instanceof Error && error.message === "LLM response exceeds safety limit") {
+            throw new RetryableLlmOutputError(error.message);
+          }
           throw new RetryableLlmOutputError("LLM endpoint returned an invalid JSON response envelope");
         }
         return parse(parseChatCompletionContent(payload));
@@ -342,7 +383,7 @@ export async function draftConclusions(config: LlmConfig, context: LlmSynthesisC
     max_tokens: effectiveTokenBudget(config.synthesisMaxTokens, SYNTHESIS_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderConclusionMessages(context),
-  }, parseConclusionDrafts, timeoutMs, retryDelayMs);
+  }, (value) => parseConclusionDrafts(value, [config.apiKey]), timeoutMs, retryDelayMs);
 }
 
 /**
@@ -350,26 +391,58 @@ export async function draftConclusions(config: LlmConfig, context: LlmSynthesisC
  * 整体丢弃（不从该候选中删除坏 ID 后部分放行）；其他独立候选继续逐条校验。
  * 文本过短或引用为空的候选同样丢弃，过滤后少于三条由工作流阻断 SYNTHESIZE。
  */
-export function validateLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[]): LlmDraft[] {
+export function triageLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[], droppedAt = new Date().toISOString()): LlmDraftTriage {
   const known = new Set(knownEvidenceIds);
   const seen = new Set<string>();
-  return drafts
-    .filter((draft) => draft.text.length >= 8 && draft.text.length <= MAX_LLM_DRAFT_TEXT_LENGTH)
-    .filter((draft) => draft.evidenceIds.length > 0
-      && draft.evidenceIds.length <= MAX_LLM_DRAFT_EVIDENCE_IDS
-      && draft.evidenceIds.every((id) => id.length > 0 && id.length <= MAX_LLM_DRAFT_AUXILIARY_LENGTH))
-    .filter((draft) => draft.assumptions.length <= MAX_LLM_DRAFT_AUXILIARY_ITEMS
-      && draft.missingEvidence.length <= MAX_LLM_DRAFT_AUXILIARY_ITEMS
-      && [...draft.assumptions, ...draft.missingEvidence].every((value) => value.length <= MAX_LLM_DRAFT_AUXILIARY_LENGTH))
-    .filter((draft) => ![draft.text, ...draft.assumptions, ...draft.missingEvidence].some(containsPromptInjectionEcho))
-    .filter((draft) => draft.evidenceIds.every((id) => known.has(id)))
-    .filter((draft) => {
-      const key = draft.text.normalize("NFKC").toLocaleLowerCase().replace(/[\p{P}\p{S}\s]+/gu, "");
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 5);
+  const accepted: LlmDraft[] = [];
+  const rejected: RejectedDraft[] = [];
+  let rejectedOverflowCount = 0;
+  drafts.forEach((draft, draftIndex) => {
+    let dropReason: LlmDraftDropReason | null = null;
+    const textLength = codePointLength(draft.text);
+    if (textLength < 8) dropReason = "TEXT_TOO_SHORT";
+    else if (textLength > MAX_LLM_DRAFT_TEXT_LENGTH) dropReason = "TEXT_TOO_LONG";
+    else if (draft.evidenceIds.length === 0) dropReason = "NO_EVIDENCE";
+    else if (draft.evidenceIds.length > MAX_LLM_DRAFT_EVIDENCE_IDS
+      || draft.evidenceIds.some((id) => codePointLength(id) === 0 || codePointLength(id) > MAX_LLM_DRAFT_AUXILIARY_LENGTH)) dropReason = "EVIDENCE_LIMIT_EXCEEDED";
+    else if (draft.assumptions.length > MAX_LLM_DRAFT_AUXILIARY_ITEMS
+      || draft.missingEvidence.length > MAX_LLM_DRAFT_AUXILIARY_ITEMS
+      || [...draft.assumptions, ...draft.missingEvidence].some((value) => codePointLength(value) > MAX_LLM_DRAFT_AUXILIARY_LENGTH)) dropReason = "AUXILIARY_LIMIT_EXCEEDED";
+    else if ([draft.text, ...draft.assumptions, ...draft.missingEvidence].some(containsPromptInjectionEcho)) dropReason = "PROMPT_INJECTION_ECHO";
+    else if (draft.evidenceIds.some((id) => !known.has(id))) dropReason = "UNKNOWN_EVIDENCE_ID";
+    else {
+      const key = draft.text.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, "");
+      if (seen.has(key)) dropReason = "DUPLICATE";
+      else {
+        seen.add(key);
+        if (accepted.length >= 5) dropReason = "OVER_LIMIT";
+      }
+    }
+    if (!dropReason) {
+      accepted.push(draft);
+      return;
+    }
+    if (rejected.length >= MAX_REJECTED_DRAFTS) {
+      rejectedOverflowCount += 1;
+      return;
+    }
+    rejected.push({
+      draftIndex,
+      text: truncateCodePoints(draft.text, MAX_REJECTED_DRAFT_TEXT_LENGTH),
+      textTruncated: textLength > MAX_REJECTED_DRAFT_TEXT_LENGTH,
+      evidenceIds: draft.evidenceIds.slice(0, MAX_REJECTED_DRAFT_EVIDENCE_IDS).map((id) => truncateCodePoints(id, MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH)),
+      evidenceIdsTruncated: draft.evidenceIds.length > MAX_REJECTED_DRAFT_EVIDENCE_IDS
+        || draft.evidenceIds.some((id) => codePointLength(id) > MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH),
+      dropReason,
+      droppedAt,
+      draftSha256: hashValue(draft),
+    });
+  });
+  return { accepted, rejected, rejectedOverflowCount };
+}
+
+export function validateLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[]): LlmDraft[] {
+  return triageLlmDrafts(drafts, knownEvidenceIds).accepted;
 }
 
 /**
@@ -384,7 +457,7 @@ export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext,
     max_tokens: effectiveTokenBudget(config.planMaxTokens, PLAN_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderPlanMessages(context),
-  }, parsePlanDrafts, timeoutMs, retryDelayMs);
+  }, (value) => parsePlanDrafts(value, [config.apiKey]), timeoutMs, retryDelayMs);
 }
 
 /**

@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { researchRunSchema, runStepSchema, toolCallEventSchema, workflowStates, type ArtifactVersion, type ResearchRun, type RunStep, type ToolCallEvent } from "./domain.js";
 import { DomainError } from "./domain-error.js";
+import { hashFile } from "./hash.js";
 import { isMainModule } from "./main-module.js";
 import { atomicWriteJson } from "./atomic-file.js";
 import { loadPersistedRun, persistRun } from "./artifacts.js";
@@ -198,6 +199,8 @@ function publicArtifactVersion(run: ResearchRun, version: ArtifactVersion) {
     sources: version.sources,
     evidence: version.evidence,
     conclusions: version.conclusions,
+    rejectedDrafts: version.rejectedDrafts,
+    rejectedDraftOverflowCount: version.rejectedDraftOverflowCount,
     adjustmentNote: version.adjustmentNote,
     status: version.status,
     supersedesId: version.supersedesId,
@@ -960,6 +963,10 @@ export function createInsightForgeServer(options: ServerOptions) {
           info = await stat(artifact.path);
         } catch {
           sendJson(response, 404, { error: "Artifact file is unavailable" });
+          return;
+        }
+        if (info.size !== artifact.sizeBytes || await hashFile(artifact.path) !== artifact.sha256) {
+          sendJson(response, 409, { error: "Artifact integrity check failed" });
           return;
         }
         response.writeHead(200, {

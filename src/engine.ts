@@ -10,6 +10,7 @@ import {
   workflowStates,
   type Evidence,
   type ModelProvenance,
+  type RejectedDraft,
   type ResearchPlan,
   type ResearchRun,
   type ResearchSource,
@@ -32,7 +33,7 @@ import {
   renderPlanMessages,
   resolveLlmConfig,
   SYNTHESIS_MAX_TOKENS,
-  validateLlmDrafts,
+  triageLlmDrafts,
   validatePlanSteps,
   type LlmConfig,
 } from "./llm.js";
@@ -379,6 +380,8 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
     let synthesis: SynthesisBundle;
     let synthesisMode: SynthesisMode;
     let modelProvenance: ModelProvenance;
+    let rejectedDrafts: RejectedDraft[] = [];
+    let rejectedDraftOverflowCount = 0;
 
     if (llmMode === "cached" && exactGolden) {
       const cached = await recordTool(options, events, "cached-model-synthesizer", "读取认证模型候选缓存并校验摘要、问题域、Schema、证据 ID 与假设 ID", () => loadCachedModelSynthesis(options.fixtureDir, options.researchQuestion, evidence.map((item) => item.id), seed.assumptions.map((item) => item.id)));
@@ -390,12 +393,15 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       const synthesisContext = { question: options.researchQuestion, sources, evidence, data: seed.data };
       const synthesisPromptSha256 = promptMessagesSha256(renderConclusionMessages(synthesisContext));
       const drafts = await recordTool(options, events, "llm-synthesizer", "单一端点模型提出候选（同一请求共享最多两次传输/解析尝试）", () => draftConclusions(config, synthesisContext));
-      const valid = validateLlmDrafts(drafts, evidence.map((item) => item.id));
+      const triage = triageLlmDrafts(drafts, evidence.map((item) => item.id));
+      const valid = triage.accepted;
+      rejectedDrafts = triage.rejected;
+      rejectedDraftOverflowCount = triage.rejectedOverflowCount;
       if (valid.length < 3) throw new Error("Live model produced fewer than three schema-valid, evidence-linked candidates");
       synthesis = bundleFromLlmDrafts(valid, { data: seed.data, sources, evidence });
       synthesis.assumptions.push(...seed.assumptions);
       synthesisMode = "LIVE_SINGLE_ENDPOINT";
-      modelProvenance = { planSource: "LIVE_SINGLE_ENDPOINT", synthesisSource: "LIVE_SINGLE_ENDPOINT", provider: new URL(config.baseUrl).hostname, model: config.model, generatedAt: isoNow(), promptSha256: synthesisPromptSha256, planPromptSha256: livePlanPromptSha256!, synthesisPromptSha256, planMaxTokens: config.planMaxTokens ?? PLAN_MAX_TOKENS, synthesisMaxTokens: config.synthesisMaxTokens ?? SYNTHESIS_MAX_TOKENS, outputSha256: hashValue(valid), cacheFile: null, routingNotice: "PLAN 与 SYNTHESIZE 均调用同一在线端点；发送字段已最小化并在 dataDisclosure 留痕。", dataDisclosure: modelDataDisclosure(["PLAN", "SYNTHESIZE"]) };
+      modelProvenance = { planSource: "LIVE_SINGLE_ENDPOINT", synthesisSource: "LIVE_SINGLE_ENDPOINT", provider: new URL(config.baseUrl).hostname, model: config.model, generatedAt: isoNow(), promptSha256: synthesisPromptSha256, planPromptSha256: livePlanPromptSha256!, synthesisPromptSha256, planMaxTokens: config.planMaxTokens ?? PLAN_MAX_TOKENS, synthesisMaxTokens: config.synthesisMaxTokens ?? SYNTHESIS_MAX_TOKENS, outputSha256: hashValue(drafts), cacheFile: null, routingNotice: "PLAN 与 SYNTHESIZE 均调用同一在线端点；发送字段已最小化并在 dataDisclosure 留痕。", dataDisclosure: modelDataDisclosure(["PLAN", "SYNTHESIZE"]) };
     } else if (llmMode === "off" && exactGolden) {
       synthesis = seed;
       synthesisMode = "DETERMINISTIC_GOLDEN_RULES";
@@ -434,8 +440,15 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       }
     }
     applySourceConfidence(sources, synthesis.conclusions);
-    const synthesisOutput = { synthesis: structuredClone(synthesis), synthesisMode, evidenceFit: fit, sourceSnapshotId };
-    finishStep(activeStep, synthesisOutput, `${synthesis.conclusions.length} 条候选；${synthesisMode}；证据匹配度 ${(fit * 100).toFixed(0)}%；${modelProvenance.routingNotice}`);
+    const synthesisOutput = {
+      synthesis: structuredClone(synthesis),
+      synthesisMode,
+      evidenceFit: fit,
+      sourceSnapshotId,
+      rejectedDrafts: structuredClone(rejectedDrafts),
+      rejectedDraftOverflowCount,
+    };
+    finishStep(activeStep, synthesisOutput, `${synthesis.conclusions.length} 条候选入选、${rejectedDrafts.length} 条被否决${rejectedDraftOverflowCount > 0 ? `、另有 ${rejectedDraftOverflowCount} 条仅计数` : ""}；${synthesisMode}；证据匹配度 ${(fit * 100).toFixed(0)}%；${modelProvenance.routingNotice}`);
     await publishProgress(options, steps);
 
     activeStep = startStep(steps, "AUDIT", [steps[2]!.outputId]);
@@ -478,6 +491,8 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       evidenceGaps: synthesis.evidenceGaps,
       conclusions: synthesis.conclusions,
       candidateRevisions: synthesis.candidateRevisions,
+      rejectedDrafts,
+      rejectedDraftOverflowCount,
       conflicts,
       auditFindings,
       humanDecisions: [],

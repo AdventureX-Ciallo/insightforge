@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -118,6 +118,11 @@ test("artifact version APIs preserve immutable delivery, source, and trigger sna
     assert.deepEqual(retainedVersions.map((item) => item.version), [4, 5, 6, 7, 8]);
     assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifact-versions/1`)).status, 404);
     assert.equal((await fetch(`${baseUrl}/api/runs/${runId}/artifacts/PPTX?version=1`)).status, 404);
+    const retainedDirectories = (await readdir(join(workspaceDir, runId, "artifacts"), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    assert.deepEqual(retainedDirectories, ["v4", "v5", "v6", "v7", "v8"]);
   } finally {
     await app.stop();
   }

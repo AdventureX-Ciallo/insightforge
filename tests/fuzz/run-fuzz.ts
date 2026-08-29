@@ -9,6 +9,7 @@ import { runSuite, type FuzzSuiteResult, invariant } from "./harness.js";
 import { runHumanDecisionFuzz } from "./human-decision.fuzz.js";
 import { runLlmBudgetFuzz } from "./llm-budget.fuzz.js";
 import { runLlmRetryFuzz } from "./llm-retry.fuzz.js";
+import { runRejectedDraftsFuzz } from "./rejected-drafts.fuzz.js";
 import { runSsrfFuzz } from "./ssrf.fuzz.js";
 import { runSourceUpdateFuzz } from "./source-update.fuzz.js";
 import { runStructureFuzz } from "./structure.fuzz.js";
@@ -19,6 +20,7 @@ const CASES = {
   humanDecision: 1_000,
   llmBudget: 1_000,
   llmRetry: 10_000,
+  rejectedDrafts: 30_000,
   sourceUpdate: 84,
   structure: 246_000,
   api: 5_000,
@@ -59,7 +61,7 @@ async function main() {
   const started = performance.now();
   const results: FuzzSuiteResult[] = [];
   const lines = await sourceLines(resolve("src"));
-  const nonStructureCases = CASES.engine + CASES.humanDecision + CASES.llmBudget + CASES.llmRetry + CASES.sourceUpdate + CASES.api + CASES.audit + CASES.upload + CASES.ssrf;
+  const nonStructureCases = CASES.engine + CASES.humanDecision + CASES.llmBudget + CASES.llmRetry + CASES.rejectedDrafts + CASES.sourceUpdate + CASES.api + CASES.audit + CASES.upload + CASES.ssrf;
   const structureCases = Math.max(CASES.structure, lines * 100 - nonStructureCases + 1_000);
 
   const engine = await runSuite(options.seed, "engine-random-walk", (rng) => runEngineFuzz(rng, CASES.engine), ["injected failures propagate", "terminal status remains one of three", "step consumption chain remains intact"]);
@@ -72,6 +74,8 @@ async function main() {
   results.push(llmBudget.result);
   const llmRetry = await runSuite(options.seed, "llm-bounded-retry", (rng) => runLlmRetryFuzz(rng, CASES.llmRetry), ["random transport and model-output failure sequences never exceed two attempts", "PLAN and SYNTHESIZE share retry semantics", "endpoint, authorization and serialized request remain immutable", "untrusted response text and API keys never enter final errors"]);
   results.push(llmRetry.result);
+  const rejectedDrafts = await runSuite(options.seed, "rejected-draft-triage", (rng) => runRejectedDraftsFuzz(rng, CASES.rejectedDrafts), ["random Unicode and array boundaries classify deterministically", "accepted ordering and five-item cap remain stable", "retained previews and overflow remain exactly bounded", "digests and timestamps remain auditable"]);
+  results.push(rejectedDrafts.result);
   const sourceUpdate = await runSuite(options.seed, "source-update-dependency-graph", (rng) => runSourceUpdateFuzz(rng, CASES.sourceUpdate), ["random valid graph IDs never fall back to fixture IDs", "unsupported graph variants return typed 409/422 without caller mutation", "only true dependents become stale", "confirmation invalidation and replay remain durable and bounded"]);
   results.push(sourceUpdate.result);
   const api = await runSuite(options.seed, "http-api", (rng) => runApiFuzz(rng, CASES.api), ["random methods, paths, encodings, NUL and bodies never return 5xx", "server remains healthy"]);

@@ -11,6 +11,8 @@ import {
   containsPromptInjectionEcho,
   draftConclusions,
   draftPlanSteps,
+  MAX_LLM_DRAFT_CANDIDATES,
+  MAX_LLM_RESPONSE_BYTES,
   PLAN_TOOL_ALLOWLIST,
   resolveLlmConfig,
   validateLlmDrafts,
@@ -305,6 +307,53 @@ test("LLM response validation rejects empty/missing arrays and normalizes hostil
     { objective: "", toolName: "", expectedOutput: "" },
     { objective: "", toolName: "", expectedOutput: "" },
   ]);
+});
+
+test("LLM transport rejects oversized envelopes and excessive candidate counts before draft mapping", async () => {
+  let declaredCalls = 0;
+  await assert.rejects(withFetch(async () => {
+    declaredCalls += 1;
+    return new Response("{}", { headers: { "content-type": "application/json", "content-length": String(MAX_LLM_RESPONSE_BYTES + 1) } });
+  }, () => draftConclusions(config, synthesisContext, 100, 0)), /response exceeds safety limit/u);
+  assert.equal(declaredCalls, 2);
+
+  let streamedCalls = 0;
+  await assert.rejects(withFetch(async () => {
+    streamedCalls += 1;
+    return new Response("x".repeat(MAX_LLM_RESPONSE_BYTES + 1), { headers: { "content-type": "application/json" } });
+  }, () => draftConclusions(config, synthesisContext, 100, 0)), /response exceeds safety limit/u);
+  assert.equal(streamedCalls, 2);
+
+  const excessive = Array.from({ length: MAX_LLM_DRAFT_CANDIDATES + 1 }, () => ({
+    text: "证据约束候选判断。",
+    evidenceIds: ["e1"],
+    assumptions: [],
+    missingEvidence: [],
+  }));
+  await assert.rejects(withFetch(async () => jsonResponse({ choices: [{ message: { content: JSON.stringify({ conclusions: excessive }) } }] }),
+    () => draftConclusions(config, synthesisContext, 100, 0)), /too many conclusion drafts/u);
+});
+
+test("LLM response parsing redacts the configured credential before any draft can be retained", async () => {
+  const drafts = await withFetch(async () => jsonResponse({ choices: [{ message: { content: JSON.stringify({ conclusions: [
+    { text: `证据约束候选判断包含 ${config.apiKey} 但必须先清除。`, evidenceIds: ["e1"], assumptions: [], missingEvidence: [] },
+    { text: "过短", evidenceIds: [config.apiKey], assumptions: [`Bearer ${config.apiKey}`], missingEvidence: [] },
+  ] }) } }] }), () => draftConclusions(config, synthesisContext, 100, 0));
+
+  const serialized = JSON.stringify(drafts);
+  assert.equal(serialized.includes(config.apiKey), false);
+  assert.match(serialized, /\[REDACTED\]/u);
+
+  const escapedCredentialContent = `{"conclusions":[{"text":"证据候选包含 \\u0074est-secret 但必须清除。","evidenceIds":["e1"],"assumptions":[],"missingEvidence":[]}]}`;
+  const escapedDrafts = await withFetch(async () => jsonResponse({ choices: [{ message: { content: escapedCredentialContent } }] }),
+    () => draftConclusions(config, synthesisContext, 100, 0));
+  assert.equal(JSON.stringify(escapedDrafts).includes(config.apiKey), false);
+  assert.match(JSON.stringify(escapedDrafts), /\[REDACTED\]/u);
+
+  const emptyCredentialDrafts = await withFetch(async () => jsonResponse({ choices: [{ message: { content: JSON.stringify({ conclusions: [
+    { text: "空凭据配置下的普通候选仍可安全解析。", evidenceIds: ["e1"], assumptions: [], missingEvidence: [] },
+  ] }) } }] }), () => draftConclusions({ ...config, apiKey: "" }, synthesisContext, 100, 0));
+  assert.equal(emptyCredentialDrafts[0]!.text, "空凭据配置下的普通候选仍可安全解析。");
 });
 
 test("live model prompts frame hostile material as data and deterministic guards reject instruction echoes", async () => {

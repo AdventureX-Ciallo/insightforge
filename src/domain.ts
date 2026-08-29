@@ -22,6 +22,21 @@ export const sourceDiscoveryModes = ["OFFLINE_SNAPSHOT", "LIVE_SINGLE_PROVIDER"]
 export const authorityVerificationModes = ["NOT_RUN", "LIVE_ALLOWLIST"] as const;
 export const synthesisModes = ["CACHED_MODEL_OUTPUT", "LIVE_SINGLE_ENDPOINT", "DETERMINISTIC_GOLDEN_RULES", "DETERMINISTIC_MISMATCH_BLOCK"] as const;
 export const offlineModeLabels = ["使用缓存快照", "在线模型生成 · 信源使用缓存快照"] as const;
+export const llmDraftDropReasons = [
+  "UNKNOWN_EVIDENCE_ID",
+  "TEXT_TOO_SHORT",
+  "TEXT_TOO_LONG",
+  "NO_EVIDENCE",
+  "EVIDENCE_LIMIT_EXCEEDED",
+  "AUXILIARY_LIMIT_EXCEEDED",
+  "PROMPT_INJECTION_ECHO",
+  "DUPLICATE",
+  "OVER_LIMIT",
+] as const;
+export const MAX_REJECTED_DRAFTS = 100 as const;
+export const MAX_REJECTED_DRAFT_TEXT_LENGTH = 500 as const;
+export const MAX_REJECTED_DRAFT_EVIDENCE_IDS = 20 as const;
+export const MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH = 500 as const;
 
 export type WorkflowState = (typeof workflowStates)[number];
 export type TerminalStatus = (typeof terminalStatuses)[number];
@@ -38,6 +53,18 @@ export type SourceDiscoveryMode = (typeof sourceDiscoveryModes)[number];
 export type AuthorityVerificationMode = (typeof authorityVerificationModes)[number];
 export type SynthesisMode = (typeof synthesisModes)[number];
 export type OfflineModeLabel = (typeof offlineModeLabels)[number];
+export type LlmDraftDropReason = (typeof llmDraftDropReasons)[number];
+
+export interface RejectedDraft {
+  draftIndex: number;
+  text: string;
+  textTruncated: boolean;
+  evidenceIds: string[];
+  evidenceIdsTruncated: boolean;
+  dropReason: LlmDraftDropReason;
+  droppedAt: string;
+  draftSha256: string;
+}
 
 export interface RunStep {
   state: WorkflowState;
@@ -320,6 +347,8 @@ export interface ArtifactVersion {
   sources: ResearchSource[];
   evidence: Evidence[];
   conclusions: Conclusion[];
+  rejectedDrafts: RejectedDraft[];
+  rejectedDraftOverflowCount: number;
   status: "CURRENT" | "SUPERSEDED";
   supersedesId: string | null;
 }
@@ -369,6 +398,8 @@ export interface SynthesisStepOutput {
   synthesisMode: SynthesisMode;
   evidenceFit: number;
   sourceSnapshotId: string;
+  rejectedDrafts?: RejectedDraft[] | undefined;
+  rejectedDraftOverflowCount?: number | undefined;
 }
 
 export interface ResearchRun {
@@ -399,6 +430,8 @@ export interface ResearchRun {
   evidenceGaps: EvidenceGap[];
   conclusions: Conclusion[];
   candidateRevisions: CandidateRevision[];
+  rejectedDrafts: RejectedDraft[];
+  rejectedDraftOverflowCount: number;
   conflicts: SourceConflict[];
   auditFindings: AuditFinding[];
   humanDecisions: HumanDecision[];
@@ -647,6 +680,17 @@ export const humanDecisionSchema = z.object({
   sourceUpdateId: z.string().nullable(),
 }).strict();
 
+export const rejectedDraftSchema = z.object({
+  draftIndex: z.number().int().nonnegative(),
+  text: z.string().max(MAX_REJECTED_DRAFT_TEXT_LENGTH),
+  textTruncated: z.boolean(),
+  evidenceIds: z.array(z.string().max(MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH)).max(MAX_REJECTED_DRAFT_EVIDENCE_IDS),
+  evidenceIdsTruncated: z.boolean(),
+  dropReason: z.enum(llmDraftDropReasons),
+  droppedAt: z.string().datetime(),
+  draftSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+}).strict();
+
 export const runStepSchema = z.object({
   state: z.enum(workflowStates),
   status: z.enum(["pending", "running", "success", "failed"]),
@@ -712,6 +756,8 @@ export const artifactVersionSchema = z.object({
   sources: z.array(sourceSchema).min(1).max(10),
   evidence: z.array(evidenceSchema).min(1),
   conclusions: z.array(conclusionSchema).min(3).max(5),
+  rejectedDrafts: z.array(rejectedDraftSchema).max(MAX_REJECTED_DRAFTS).default([]),
+  rejectedDraftOverflowCount: z.number().int().nonnegative().default(0),
   status: z.enum(["CURRENT", "SUPERSEDED"]),
   supersedesId: z.string().nullable(),
 }).strict();
@@ -775,6 +821,8 @@ export const evidencePackageSchema = z.object({
   evidenceGaps: z.array(evidenceGapSchema),
   conclusions: z.array(conclusionSchema).min(3).max(5),
   candidateRevisions: z.array(candidateRevisionSchema).min(3),
+  rejectedDrafts: z.array(rejectedDraftSchema).max(MAX_REJECTED_DRAFTS).default([]),
+  rejectedDraftOverflowCount: z.number().int().nonnegative().default(0),
   auditFindings: z.array(auditFindingSchema),
   humanDecisions: z.array(humanDecisionSchema),
   artifactVersions: z.array(artifactVersionSchema).max(MAX_ARTIFACT_VERSIONS),
@@ -823,6 +871,8 @@ const researchRunObjectSchema = z.object({
     synthesisMode: z.enum(synthesisModes),
     evidenceFit: z.number().min(0).max(1),
     sourceSnapshotId: z.string().min(1),
+    rejectedDrafts: z.array(rejectedDraftSchema).max(MAX_REJECTED_DRAFTS).optional(),
+    rejectedDraftOverflowCount: z.number().int().nonnegative().optional(),
   }).strict(),
   sources: z.array(sourceSchema).min(1).max(10),
   sourceVersions: z.array(sourceVersionSchema).min(1),
@@ -833,6 +883,8 @@ const researchRunObjectSchema = z.object({
   evidenceGaps: z.array(evidenceGapSchema),
   conclusions: z.array(conclusionSchema).min(3).max(5),
   candidateRevisions: z.array(candidateRevisionSchema).min(3),
+  rejectedDrafts: z.array(rejectedDraftSchema).max(MAX_REJECTED_DRAFTS).default([]),
+  rejectedDraftOverflowCount: z.number().int().nonnegative().default(0),
   conflicts: z.array(sourceConflictSchema),
   auditFindings: z.array(auditFindingSchema),
   humanDecisions: z.array(humanDecisionSchema),
@@ -866,7 +918,16 @@ const normalizedReviewByLegacy: Record<ReviewStatus, NormalizedReviewStatus> = {
 };
 
 /** Schema 锁不只验证字段形状，也验证证据图引用、人工边界与当前版本唯一性。 */
-type ResearchRunSchemaInput = Omit<ResearchRun, "evictedArtifactVersionCount"> & { evictedArtifactVersionCount?: number | undefined };
+type ArtifactVersionSchemaInput = Omit<ArtifactVersion, "rejectedDrafts" | "rejectedDraftOverflowCount"> & {
+  rejectedDrafts?: RejectedDraft[] | undefined;
+  rejectedDraftOverflowCount?: number | undefined;
+};
+type ResearchRunSchemaInput = Omit<ResearchRun, "artifactVersions" | "evictedArtifactVersionCount" | "rejectedDrafts" | "rejectedDraftOverflowCount"> & {
+  artifactVersions: ArtifactVersionSchemaInput[];
+  evictedArtifactVersionCount?: number | undefined;
+  rejectedDrafts?: RejectedDraft[] | undefined;
+  rejectedDraftOverflowCount?: number | undefined;
+};
 export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRunSchemaInput> = researchRunObjectSchema.superRefine((run, ctx) => {
   const presentation = modePresentation(run.synthesisMode);
   if (run.offlineMode !== presentation.offlineMode) graphIssue(ctx, ["offlineMode"], "offlineMode does not match synthesisMode");
@@ -876,6 +937,10 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
     graphIssue(ctx, ["modelProvenance", "dataDisclosure"], "Live model use requires a per-run external data disclosure");
   }
   if (run.synthesisOutput.synthesisMode !== run.synthesisMode) graphIssue(ctx, ["synthesisOutput", "synthesisMode"], "SYNTHESIZE snapshot mode does not match run mode");
+  if (hashValue(run.synthesisOutput.rejectedDrafts ?? []) !== hashValue(run.rejectedDrafts)
+    || (run.synthesisOutput.rejectedDraftOverflowCount ?? 0) !== run.rejectedDraftOverflowCount) {
+    graphIssue(ctx, ["rejectedDrafts"], "Rejected draft trace must match the immutable SYNTHESIZE snapshot");
+  }
   const synthesizeStep = run.steps.find((step) => step.state === "SYNTHESIZE");
   if (!synthesizeStep) graphIssue(ctx, ["steps"], "Run must contain a SYNTHESIZE step");
   else if (synthesizeStep.outputId !== hashValue(run.synthesisOutput)) {
@@ -1024,6 +1089,10 @@ export const researchRunSchema: z.ZodType<ResearchRun, z.ZodTypeDef, ResearchRun
   run.artifactVersions.forEach((version, index) => {
     for (const id of version.artifactIds) if (!artifactIds.has(id)) graphIssue(ctx, ["artifactVersions", index, "artifactIds"], `ArtifactVersion points to unknown Artifact ${id}`);
     if (version.status === "CURRENT" && version.researchSnapshotId !== run.researchSnapshotId) graphIssue(ctx, ["artifactVersions", index, "researchSnapshotId"], "Current ArtifactVersion must match the current research snapshot");
+    if (hashValue(version.rejectedDrafts) !== hashValue(run.rejectedDrafts)
+      || version.rejectedDraftOverflowCount !== run.rejectedDraftOverflowCount) {
+      graphIssue(ctx, ["artifactVersions", index, "rejectedDrafts"], "ArtifactVersion must preserve the immutable rejected draft trace");
+    }
   });
   if (run.artifactVersions.length > 0 && run.artifactVersions.filter((item) => item.status === "CURRENT").length !== 1) graphIssue(ctx, ["artifactVersions"], "Exactly one ArtifactVersion must be current");
   if (run.researchSnapshotId !== computeResearchSnapshotId(run)) graphIssue(ctx, ["researchSnapshotId"], "Research snapshot ID does not match the current evidence graph");
