@@ -87,6 +87,8 @@ INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS=16384
 
 该路径只允许一个 HTTPS Chat Completions 端点，不路由多模型、不自动 fallback；端点必须接受项目当前使用的 `max_tokens` 与 JSON Object 请求字段。推理模型的隐藏推理和可见 JSON 可能共享输出预算，因此默认 PLAN/SYNTHESIZE 预算为 `8192/16384`；低输出上限端点可通过上述环境变量或 `/api/settings/llm` 的同名 camelCase 字段覆盖，API 设置整体优先于环境变量。无效预算 fail-closed，实际使用值写入 `modelProvenance`。问题与经最小化的信源标题、证据摘录、定位类型、Datum/公式以“未受信任 JSON 数据”发送；完整 URL、publisher、本地路径、上传文件名/哈希、人工决定和成果字节不会发送。每个 run 的 `modelProvenance.dataDisclosure` 记录实际发送阶段、字段、截断上限和省略字段；低匹配任务若只调用了在线 PLAN，会明确写出“未发送 SYNTHESIZE”。来源中的指令没有优先级。明显注入指令回声、Schema 错误、超长字段或未知 evidence ID 会使含问题的单条候选整体丢弃，绝不删除坏字段后部分放行；其他独立候选仍逐条校验，过滤后少于 3 条才阻断整个 SYNTHESIZE。缺配置、网络失败和重复候选导致有效候选不足同样 fail-closed。任何密钥只存在于运行环境，不得提交。
 
+凭据优先建议使用上述环境变量，使 API Key 不落盘。设置 API 仅供本地演示便利：它会把 key 明文写入 `.insightforge/settings.json`，POSIX 权限固定为 `0600`；`.insightforge/` 已同时被 `.gitignore`、密钥扫描和源码 ZIP 打包规则排除。演示后请删除该文件或轮换 key，勿把工作区暴露给其他用户或备份系统。
+
 ## 一键演示会发生什么
 
 1. `PLAN`：模型缓存提出五步计划，程序校验工具 allowlist 和 Audit/Deliver 锚点。

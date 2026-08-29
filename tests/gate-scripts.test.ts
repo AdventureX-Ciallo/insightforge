@@ -58,9 +58,10 @@ test("source packaging excludes presentation assets but retains executable golde
       assert.equal(sha256(bytes), expectedSha256, `source archive changed authenticated fixture ${fileName}`);
     }
     const packageManifest = JSON.parse(await readFile(`${archivePath}.manifest.json`, "utf8")) as {
-      exclusions: { paths: string[] };
+      exclusions: { paths: string[]; directories: string[] };
     };
     assert.deepEqual(packageManifest.exclusions.paths, ["demo-assets", "docs/assets"]);
+    assert.ok(packageManifest.exclusions.directories.includes(".insightforge"), "runtime settings and API keys must never enter source ZIPs");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
