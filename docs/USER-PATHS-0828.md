@@ -69,6 +69,7 @@
 |---|---|---|
 | 引擎选择（百度 / Google / Bing） | `POST /api/sources/search {engine, query}` → 候选信源列表（URL/标题/引擎标识）；结果仅为候选来源，解析建模前不构成证据（路线图 P2-5） | 服务端仅发 http/https、请求前校验 host、拒绝环回/私有/保留地址、目标域限引擎白名单（SSRF 测试族） |
 | v1→v2 更新影响链（受影响对象列表、确认失效、重算） | `POST /api/runs/:id/source-update` + 后端持久化的受影响对象清单；同时支持黄金问题的缓存模型与在线单端点运行，按实际 Evidence→Datum→Claim→Conclusion 关系解析动态 ID | 不相关结论不变；确认撤销留痕；刷新/重启后状态仍在；同一 run 重复更新返回 409“来源已在 v2”，非黄金任务返回 422“仅适用于内置黄金案例” |
+| 基于 v2 复核 STALE 结论 | `POST /api/runs/:id/conclusions/:conclusionId/revalidate` | 仅 STALE 可复核；证据路径当前时恢复 `CURRENT/PENDING_REVIEW`，不自动确认；旧确认及失效记录保留并生成 `REVALIDATION` 成果版本 |
 | 调整逻辑说明 | 冲突解释保持 CANDIDATE_EXPLANATION 状态 | 不静默选值、不求平均（现有测试） |
 
 ## 横切能力 A：自定义白名单上传

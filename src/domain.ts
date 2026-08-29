@@ -340,7 +340,7 @@ export interface ArtifactVersion {
   researchSnapshotId: string;
   version: number;
   createdAt: string;
-  trigger: "INITIAL_DELIVER" | "HUMAN_DECISION" | "HUMAN_EDIT" | "SOURCE_UPDATE";
+  trigger: "INITIAL_DELIVER" | "HUMAN_DECISION" | "HUMAN_EDIT" | "SOURCE_UPDATE" | "REVALIDATION";
   triggerRef: string;
   adjustmentNote: string;
   artifactIds: string[];
@@ -749,7 +749,7 @@ export const artifactVersionSchema = z.object({
   researchSnapshotId: z.string().min(1),
   version: z.number().int().positive(),
   createdAt: z.string().min(1),
-  trigger: z.enum(["INITIAL_DELIVER", "HUMAN_DECISION", "HUMAN_EDIT", "SOURCE_UPDATE"]),
+  trigger: z.enum(["INITIAL_DELIVER", "HUMAN_DECISION", "HUMAN_EDIT", "SOURCE_UPDATE", "REVALIDATION"]),
   triggerRef: z.string().min(1),
   adjustmentNote: z.string().min(1),
   artifactIds: z.array(z.string()).min(1),

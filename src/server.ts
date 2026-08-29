@@ -20,6 +20,7 @@ import { buildBoundaryQuestions } from "./boundary-questions.js";
 import { MAX_RUN_SOURCES, MAX_RUN_UPLOADS, runGoldenCase, type CollectedUploadInput } from "./engine.js";
 import { applyHumanDecisionAndPersist, type HumanDecisionInput } from "./human-decision.js";
 import { applySourceUpdate } from "./source-update.js";
+import { revalidateConclusionAndPersist } from "./conclusion-revalidation.js";
 import { loadApiLlmSettings, publicLlmSettings, saveApiLlmSettings, SettingsStoreError } from "./settings-store.js";
 import { researchPresets } from "./presets.js";
 import { MAX_CONCURRENT_RUNS, MAX_RETAINED_RUNS, progressFileRunId, pruneRunWorkspace } from "./run-retention.js";
@@ -187,6 +188,8 @@ function publicArtifactVersion(run: ResearchRun, version: ArtifactVersion) {
     ? "initial"
     : version.trigger === "SOURCE_UPDATE"
       ? "source-update"
+      : version.trigger === "REVALIDATION"
+        ? "revalidation"
       : "human-decision";
   return {
     id: version.id,
@@ -245,6 +248,7 @@ const API_ROUTE_METHODS: Array<{ pattern: RegExp; methods: readonly string[] }> 
   { pattern: /^\/api\/runs\/[^/]+$/u, methods: ["GET"] },
   { pattern: /^\/api\/runs\/[^/]+\/events$/u, methods: ["GET"] },
   { pattern: /^\/api\/runs\/[^/]+\/(?:decisions|source-update)$/u, methods: ["POST"] },
+  { pattern: /^\/api\/runs\/[^/]+\/conclusions\/[^/]+\/revalidate$/u, methods: ["POST"] },
   { pattern: /^\/api\/runs\/[^/]+\/(?:boundary-questions|artifact-versions(?:\/[^/]+)?|artifacts\/(?:PPTX|EVIDENCE_JSON|REPORT_MD|REPORT_PDF))$/u, methods: ["GET"] },
 ];
 
@@ -898,6 +902,24 @@ export function createInsightForgeServer(options: ServerOptions) {
         }
         const updatedRun = await serializeRunMutation(job.runId, async () => {
           job.run = await applySourceUpdate(job.run!, { fixtureDir: options.fixtureDir, workspaceDir: options.workspaceDir });
+          await publishCurrentRun(job.run);
+          await persistJob(job);
+          return job.run;
+        });
+        sendJson(response, 200, { run: publicRun(updatedRun) });
+        return;
+      }
+      const revalidationMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/conclusions\/([^/]+)\/revalidate$/);
+      if (method === "POST" && revalidationMatch?.[1] && revalidationMatch[2]) {
+        await discardRequestBody(request);
+        const job = jobs.get(revalidationMatch[1]);
+        if (!job?.run) {
+          sendJson(response, 404, { error: "Completed run not found" });
+          return;
+        }
+        const conclusionId = revalidationMatch[2];
+        const updatedRun = await serializeRunMutation(job.runId, async () => {
+          job.run = await revalidateConclusionAndPersist(job.run!, conclusionId, options.workspaceDir);
           await publishCurrentRun(job.run);
           await persistJob(job);
           return job.run;
