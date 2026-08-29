@@ -54,15 +54,23 @@ test("loopback API rejects cross-site and keyless writes while the nonce-bootstr
     const nonce = indexResponse.headers.get("content-security-policy")?.match(/'nonce-([^']+)'/u)?.[1];
     assert.ok(nonce);
     assert.match(index, new RegExp(`<script nonce="${nonce}"`, "u"));
-    assert.ok(index.indexOf("x-insightforge-request-key") < index.indexOf('src="/app.js"'));
-    assert.ok(index.includes("offlineModeLabel"), "the server bootstrap must update the mode pill from each completed run");
+    const moduleScriptIndex = index.search(/<script[^>]+type="module"[^>]+src="/u);
+    assert.ok(moduleScriptIndex > 0, "the React entrypoint must contain a module script");
+    assert.ok(index.indexOf("x-insightforge-request-key") < moduleScriptIndex);
+    assert.ok(!index.includes("offlineModeLabel"), "the server bootstrap must not mutate legacy UI elements");
     assert.equal(indexResponse.headers.get("cache-control"), "no-store");
 
+    const csrfResponse = await fetch(`${baseUrl}/api/csrf`);
+    assert.equal(csrfResponse.status, 200);
+    assert.deepEqual(await csrfResponse.json(), { token: null, required: false });
     const keyResponse = await fetch(`${baseUrl}/api/request-key`);
     assert.equal(keyResponse.status, 200);
     assert.equal(keyResponse.headers.get("cache-control"), "no-store");
     const { requestKey } = await keyResponse.json() as { requestKey: string };
     assert.match(requestKey, /^[0-9a-f-]{36}$/u);
+    const csrfWrongMethod = await fetch(`${baseUrl}/api/csrf`, { method: "POST", headers: { "x-insightforge-request-key": requestKey } });
+    assert.equal(csrfWrongMethod.status, 405);
+    assert.equal(csrfWrongMethod.headers.get("allow"), "GET");
 
     const crossSite = await fetch(`${baseUrl}/api/settings/llm`, {
       method: "POST",

@@ -5,7 +5,7 @@ import { researchRunSchema, type Claim, type ResearchRun } from "./domain.js";
 import { DomainError } from "./domain-error.js";
 import { hashValue } from "./hash.js";
 
-function restoredClaimStatus(run: ResearchRun, claim: Claim): Claim["evidenceStatus"] {
+export function restoredClaimStatus(run: ResearchRun, claim: Claim): Claim["evidenceStatus"] {
   if (claim.evidenceGapId) return "INSUFFICIENT_EVIDENCE";
   const datumIds = new Set(claim.datumIds);
   if (run.conflicts.some((conflict) => conflict.datumIds.some((id) => datumIds.has(id)))) return "CONFLICT";
@@ -39,8 +39,8 @@ export async function revalidateConclusionAndPersist(
   }
 
   const now = new Date().toISOString();
-  const previousRevision = run.candidateRevisions.find((item) => item.id === conclusion.currentRevisionId);
-  if (previousRevision) previousRevision.isCurrent = false;
+  const previousRevision = run.candidateRevisions.find((item) => item.id === conclusion.currentRevisionId)!;
+  previousRevision.isCurrent = false;
   const revisionId = `revision-revalidate-${randomUUID()}`;
   conclusion.freshness = "CURRENT";
   conclusion.evidenceStatus = conclusion.normalizedEvidenceStatus;
@@ -55,7 +55,7 @@ export async function revalidateConclusionAndPersist(
   run.candidateRevisions.push({
     id: revisionId,
     conclusionId,
-    parentRevisionId: previousRevision?.id ?? null,
+    parentRevisionId: previousRevision.id,
     authorType: "SYSTEM",
     originType: "DETERMINISTIC",
     text: conclusion.text,

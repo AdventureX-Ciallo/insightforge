@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "web"
+  ],
   "description": "Offline-first, evidence-native multi-step industry research agent.",
   "bin": {
     "insightforge": "./dist/server.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-static.mjs",
+    "build:web": "npm --prefix web run build",
+    "build": "npm run build:web && tsc && node scripts/copy-static.mjs",
     "clean": "node scripts/clean.mjs",
     "contract:check": "npm run build && node scripts/contract-check.mjs",
     "coverage": "c8 --include \"src/**\" --all --check-coverage --statements 100 --branches 100 --functions 100 --lines 100 node scripts/test-command.mjs tests",
@@ -27,10 +31,11 @@
     "smoke": "node scripts/smoke.mjs",
     "prestart": "npm run build",
     "start": "node dist/server.js",
+    "pretest": "npm run build:web",
     "test": "node scripts/test-command.mjs tests",
     "test:e2e": "playwright test",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.tests.json",
-    "verify": "npm run lint && npm run coverage && npm run build && npm run secret-scan && npm run contract:check && npm run fuzz"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.tests.json && npm --prefix web exec -- tsc -b --pretty false",
+    "verify": "npm run build && npm run lint && npm run coverage && npm run secret-scan && npm run contract:check && npm run fuzz"
   },
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=23"

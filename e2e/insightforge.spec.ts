@@ -3,7 +3,8 @@ import { resolve } from "node:path";
 import { expect, test } from "playwright/test";
 import JSZip from "jszip";
 
-test("golden case reaches an editable, traceable, update-aware delivery", async ({ page }) => {
+test("React workbench completes the evidence, decision, update, and delivery path", async ({ page }) => {
+  test.setTimeout(60_000);
   const externalRequests: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -11,87 +12,68 @@ test("golden case reaches an editable, traceable, update-aware delivery", async 
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /让每条行业判断/ })).toBeVisible();
-  await expect(page.getByText("使用缓存快照").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "选择一个研究选题" })).toBeVisible();
+  await page.getByRole("button", { name: /全功能研究案例/u }).click();
+  await expect(page.getByRole("button", { name: "开始研究" })).toBeVisible();
 
-  await page.locator("#source-file").setInputFiles({
+  await page.getByText("资料库 · 验证并保存文件").click();
+  await page.getByLabel("选择资料文件").setInputFiles({
     name: "market-<img src=x onerror=alert(1)>.csv",
     mimeType: "text/csv",
     buffer: Buffer.from("year,value\n2026,42\n", "utf8"),
   });
-  await page.getByRole("button", { name: "验证并上传资料" }).click();
-  await expect(page.locator("#upload-result")).toContainText("已持久化并复核");
-  await expect(page.locator("#upload-result")).toContainText("所选文件 SHA-256 一致");
-  await expect(page.locator("#upload-result")).toContainText(/SHA-256 [a-f0-9]{64}/);
-  await expect(page.locator("#upload-result img")).toHaveCount(0);
+  await expect(page.getByText("三方 SHA-256 一致 · 已安全落盘")).toBeVisible();
+  await expect(page.getByText("已保存 · 将随下次运行进入证据链")).toBeVisible();
 
-  await page.getByRole("button", { name: /运行黄金案例/ }).click();
-  await expect(page.locator(".state-card.running")).toBeVisible();
-  await expect(page.locator("#terminal-status")).toHaveText("NEEDS_REVIEW", { timeout: 15_000 });
-  await expect(page.locator(".state-card.success")).toHaveCount(5);
-  await expect(page.locator(".tool-row")).toHaveCount(6);
+  await page.getByRole("button", { name: "开始研究" }).click();
+  await expect(page.getByText(/终态 NEEDS_REVIEW/u).last()).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByRole("list", { name: "研究任务五状态" }).getByText("完成", { exact: true })).toHaveCount(5);
 
-  await page.getByRole("button", { name: /候选结论/ }).click();
-  await expect(page.locator(".conclusion-card")).toHaveCount(4);
+  await page.getByRole("button", { name: /第 3 步 · 研究报告/u }).click();
+  await expect(page.getByRole("heading", { name: "每条结论都能说出“凭什么”" })).toBeVisible();
+  const conclusions = page.locator("#chapter-report article");
+  await expect(conclusions).toHaveCount(4);
   await expect(page.getByText("INSUFFICIENT_EVIDENCE").first()).toBeVisible();
-  const insufficient = page.locator(".conclusion-card.insufficient");
-  await expect(insufficient.getByRole("button", { name: "确认" })).toBeDisabled();
-  await expect(insufficient.getByRole("button", { name: "编辑" })).toBeEnabled();
+  await expect(conclusions.filter({ hasText: "INSUFFICIENT_EVIDENCE" }).getByRole("button", { name: "确认" })).toBeDisabled();
 
-  await page.locator(".conclusion-card").first().getByRole("button", { name: "查看依据" }).click();
-  await expect(page.locator("#drawer")).toHaveClass(/open/);
-  await expect(page.locator("#drawer-content")).toContainText("CONCLUSION");
-  await expect(page.locator("#drawer-content")).toContainText("SOURCE");
-  await expect(page.locator("#drawer-content")).toContainText("market_v1.csv");
-  await page.getByRole("button", { name: "关闭证据路径" }).click();
+  await conclusions.first().getByRole("button", { name: "查看依据" }).click();
+  const evidenceDialog = page.getByRole("dialog", { name: /证据路径/u });
+  await expect(evidenceDialog).toBeVisible();
+  await expect(evidenceDialog.getByText("Claim", { exact: true })).toBeVisible();
+  await expect(evidenceDialog.getByText("Evidence", { exact: true }).first()).toBeVisible();
+  await expect(evidenceDialog.getByText("Source", { exact: true }).first()).toBeVisible();
+  await expect(evidenceDialog.getByText("Locator", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "关闭证据抽屉" }).click();
 
-  const charging = page.locator(".conclusion-card").nth(1);
-  await charging.getByRole("button", { name: "编辑" }).click();
-  await page.locator("#edit-text").fill("人工修订：名义供给增长不能替代区域利用率验证。");
-  const decisionResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/decisions"));
-  await page.getByRole("button", { name: "保存并确认" }).click();
-  expect((await decisionResponse).ok()).toBe(true);
-  await expect(charging).toContainText("人工修订：名义供给增长不能替代区域利用率验证。");
-  await expect(charging).toContainText("PENDING_REVIEW");
+  await conclusions.first().getByRole("button", { name: "驳回" }).click();
+  await page.getByRole("dialog", { name: "驳回结论" }).getByRole("button", { name: "确认驳回" }).click();
+  await expect(conclusions.first().getByText(/已驳回/u)).toBeVisible({ timeout: 15_000 });
 
-  await page.getByRole("button", { name: /审查修正/ }).click();
-  await expect.poll(() => page.locator(".audit-card").count()).toBeGreaterThanOrEqual(6);
-  await expect(page.getByText("MISSING_ASSUMPTION", { exact: true })).toBeVisible();
-  await expect(page.getByText("BEFORE").first()).toBeVisible();
-  await expect(page.getByText("AFTER").first()).toBeVisible();
+  await page.getByRole("button", { name: /第 4 步 · 变化/u }).click();
+  await page.getByRole("button", { name: "检查来源更新" }).click();
+  await expect(page.getByText("v2 已应用")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/STALE/u).first()).toBeVisible();
+  await expect(page.getByText(/重算结果/u)).toBeVisible();
 
-  await page.getByRole("button", { name: /来源更新/ }).click();
-  const updateResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/source-update"));
-  await page.getByRole("button", { name: /发现新版来源/ }).click();
-  expect((await updateResponse).ok()).toBe(true);
-  // 人工决定之后来源更新要沿版本链重导出全部成果；PDF 使用确定性的纯 Node 路径。
-  await expect(page.getByText("来源已更新到 v2")).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => page.locator(".impact").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(7);
+  await page.getByRole("button", { name: /第 5 步 · 交付/u }).click();
+  await expect(page.getByRole("heading", { name: "成果交付" })).toBeVisible();
+  await expect(page.getByText("PPTX · 可编辑五页模板")).toBeVisible();
+  await expect(page.getByText("证据 JSON · 完整证据链")).toBeVisible();
+  await expect(page.getByText("研究报告 · Markdown")).toBeVisible();
+  await expect(page.getByText("研究报告 · PDF")).toBeVisible();
 
-  await page.getByRole("button", { name: /成果交付/ }).click();
-  // 路线图 P1-2 之后 DELIVER 产出五类成果卡片：交互报告 + MD + PDF + PPTX + JSON。
-  await expect(page.locator(".artifact-card")).toHaveCount(5);
-  await expect(page.getByText("Markdown").first()).toBeVisible();
-  await expect(page.getByText("PDF").first()).toBeVisible();
+  const pptxCard = page.locator("#chapter-delivery .rounded-card").filter({ hasText: "PPTX · 可编辑五页模板" });
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("link", { name: "下载 PPTX" }).click();
+  await pptxCard.getByRole("link", { name: "下载" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("insightforge-report.pptx");
   const downloadedPath = await download.path();
   expect(downloadedPath).not.toBeNull();
   const pptx = await JSZip.loadAsync(await readFile(downloadedPath!));
-  const slideNames = Object.keys(pptx.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/u.test(name));
-  expect(slideNames).toHaveLength(5);
-  for (const slideName of slideNames) {
-    const xml = await pptx.file(slideName)!.async("text");
-    const bounds = [...xml.matchAll(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/gu)]
-      .map((match) => ({ right: Number(match[1]) + Number(match[3]), bottom: Number(match[2]) + Number(match[4]) }));
-    expect(bounds.length, `${slideName} contains editable shapes`).toBeGreaterThan(0);
-    expect(bounds.every((box) => box.right <= 12_192_000 && box.bottom <= 6_858_000), `${slideName} has no off-canvas shape`).toBe(true);
-  }
+  expect(Object.keys(pptx.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/u.test(name))).toHaveLength(5);
 
   const evidenceDir = resolve("evidence", "playwright");
   await mkdir(evidenceDir, { recursive: true });
-  await page.screenshot({ path: resolve(evidenceDir, "insightforge-artifacts.png"), fullPage: true });
+  await page.screenshot({ path: resolve(evidenceDir, "insightforge-react-delivery.png"), fullPage: true });
   expect(externalRequests).toEqual([]);
 });

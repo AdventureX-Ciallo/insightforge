@@ -15,7 +15,7 @@ if (mode === "tests") {
     .sort()
     .map((name) => join(testDirectory, name));
   if (testFiles.length === 0) throw new Error("No test files were discovered");
-  childArguments = ["--import", "tsx", "--test", ...forwarded, ...testFiles];
+  childArguments = ["--import", "tsx", "--test", "--test-concurrency=1", ...forwarded, ...testFiles];
 } else if (mode === "fuzz") {
   childArguments = ["--import", "tsx", join(root, "tests", "fuzz", "run-fuzz.ts"), ...forwarded];
 } else {

@@ -142,6 +142,12 @@ try {
     return body;
   });
 
+  await check("csrf-capability", "GET", "/api/csrf", async () => {
+    const body = await jsonRequest("/api/csrf");
+    requireContract(body.token === null && body.required === false, "CSRF capability response contract mismatch", body);
+    return body;
+  });
+
   await check("request-key", "GET", "/api/request-key", async () => {
     const body = await jsonRequest("/api/request-key");
     requireContract(/^[0-9a-f-]{36}$/u.test(body.requestKey), "request-key response contract mismatch", body);

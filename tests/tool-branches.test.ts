@@ -127,6 +127,12 @@ test("sparse PPTX uses honest no-conflict/no-insufficient fallbacks and escapes 
     fixtureDir: resolve("fixtures/golden"),
     workspaceDir,
   });
+  const linkedAssumption = structuredClone(run);
+  linkedAssumption.data.find((item) => item.id === "datum-adequacy-estimate")!.assumptions = ["assumption-utilization-gap"];
+  const linkedAssumptionPath = join(workspaceDir, "linked-assumption.pptx");
+  await writePptx(linkedAssumption, linkedAssumptionPath);
+  const linkedAssumptionZip = await JSZip.loadAsync(await readFile(linkedAssumptionPath));
+  assert.match(await linkedAssumptionZip.file("ppt/slides/slide3.xml")!.async("text"), /15% 利用率折损仅用于演示情景/u);
   const sparse = structuredClone(run);
   sparse.researchQuestion = `XML <unsafe> & "quoted" 'value'`;
   sparse.conflicts = [];

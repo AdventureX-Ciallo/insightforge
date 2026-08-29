@@ -110,10 +110,18 @@ test("request readers reject malformed, non-object, oversized, empty, and unsafe
   assert.equal(inside("/tmp/root", "/tmp/root/file"), true);
   assert.equal(inside("/tmp/root", "/tmp/root"), false);
   assert.equal(inside("/tmp/root", "/tmp/other"), false);
-  assert.deepEqual(["a.html", "a.css", "a.js", "a.pptx", "a.pdf", "a.md", "a.json", "a.bin"].map(contentType), [
+  assert.deepEqual(["a.html", "a.css", "a.js", "a.woff2", "a.woff", "a.svg", "a.png", "a.webp", "a.jpg", "a.jpeg", "a.ico", "a.pptx", "a.pdf", "a.md", "a.json", "a.bin"].map(contentType), [
     "text/html; charset=utf-8",
     "text/css; charset=utf-8",
     "text/javascript; charset=utf-8",
+    "font/woff2",
+    "font/woff",
+    "image/svg+xml",
+    "image/png",
+    "image/webp",
+    "image/jpeg",
+    "image/jpeg",
+    "image/x-icon",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/pdf",
     "text/markdown; charset=utf-8",
@@ -234,7 +242,9 @@ test("HTTP API covers fail-closed route errors and all artifact/static content t
   await app.stop();
   const baseUrl = await app.start(0, "localhost");
   try {
-    assert.equal((await fetch(`${baseUrl}/api/current`)).status, 404);
+    const emptyCurrent = await fetch(`${baseUrl}/api/current`);
+    assert.equal(emptyCurrent.status, 200);
+    assert.deepEqual(await emptyCurrent.json(), { run: null });
     assert.equal((await fetch(`${baseUrl}/api/sources/live-check`, { method: "POST", body: "consumed" })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "新能源" }) })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sources/live-search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: 1 }) })).status, 400);
@@ -484,6 +494,15 @@ test("runtime assets resolve from the source or built module instead of process 
   await rm(join(nonFile, "public", "index.html"));
   await mkdir(join(nonFile, "public", "index.html"));
   await assert.rejects(assertRuntimeAssets(join(nonFile, "public"), join(nonFile, "fixtures/golden")), /runtime assets are incomplete/u);
+  const missingBundle = await mkdtemp(join(tmpdir(), "insightforge-missing-bundle-"));
+  await prepareRuntimeRoot(missingBundle);
+  await writeFile(join(missingBundle, "public", "index.html"), '<script type="module" src="/assets/missing.js"></script>', "utf8");
+  await assert.rejects(assertRuntimeAssets(join(missingBundle, "public"), join(missingBundle, "fixtures/golden")), /runtime assets are incomplete/u);
+  const nonFileFixture = await mkdtemp(join(tmpdir(), "insightforge-non-file-fixture-"));
+  await prepareRuntimeRoot(nonFileFixture);
+  await rm(join(nonFileFixture, "fixtures/golden/market_v1.csv"));
+  await mkdir(join(nonFileFixture, "fixtures/golden/market_v1.csv"));
+  await assert.rejects(assertRuntimeAssets(join(nonFileFixture, "public"), join(nonFileFixture, "fixtures/golden")), /runtime assets are incomplete/u);
 
   const entryRoot = await mkdtemp(join(tmpdir(), "insightforge-entrypoint-"));
   const realEntry = join(entryRoot, "server.js");

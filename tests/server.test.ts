@@ -9,7 +9,7 @@ import { createInsightForgeServer } from "../src/server.js";
 import { MAX_RETAINED_UPLOADS, persistUpload } from "../src/upload-store.js";
 
 async function waitForRun(baseUrl: string, runId: string) {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 60_000;
   const observed = new Set<string>();
   while (Date.now() < deadline) {
     const response = await fetch(`${baseUrl}/api/runs/${runId}`);

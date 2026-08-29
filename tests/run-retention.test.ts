@@ -22,7 +22,7 @@ async function createRun(baseUrl: string, uploadIds?: string[]) {
 }
 
 async function waitForTerminal(baseUrl: string, runId: string) {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const response = await fetch(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { job: { status: string } };

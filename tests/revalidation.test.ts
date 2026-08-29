@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { revalidateConclusionAndPersist, restoredClaimStatus } from "../src/conclusion-revalidation.js";
+import { computeResearchSnapshotId, type Claim, type ResearchRun } from "../src/domain.js";
+import { DomainError } from "../src/domain-error.js";
 import { createInsightForgeServer } from "../src/server.js";
 
 async function waitForRun(baseUrl: string, runId: string) {
@@ -38,6 +41,21 @@ test("STALE conclusion can be revalidated against v2 without losing decision his
     assert.equal(stale.conclusions.find((item) => item.id === "conclusion-penetration")?.freshness, "STALE");
     assert.ok(stale.humanDecisions.some((item) => item.action === "CONFIRM" && item.invalidatedAt));
 
+    const persistedStale = JSON.parse(await readFile(join(workspaceDir, created.runId, "run.json"), "utf8")) as ResearchRun;
+    const penetrationClaim = persistedStale.claims.find((item) => item.id === "claim-penetration")!;
+    assert.equal(restoredClaimStatus(persistedStale, penetrationClaim), "CONFLICT");
+    assert.equal(restoredClaimStatus({ ...persistedStale, conflicts: [] }, penetrationClaim), "SUPPORTED");
+    assert.equal(restoredClaimStatus(persistedStale, { ...penetrationClaim, evidenceGapId: "test-gap" } as Claim), "INSUFFICIENT_EVIDENCE");
+    const blocked = structuredClone(persistedStale);
+    const referencedEvidence = blocked.evidence.find((item) => blocked.claims.find((claim) => claim.id === "claim-penetration")!.evidenceIds.includes(item.id))!;
+    referencedEvidence.freshness = "STALE";
+    blocked.researchSnapshotId = computeResearchSnapshotId(blocked);
+    blocked.artifactVersions.find((item) => item.status === "CURRENT")!.researchSnapshotId = blocked.researchSnapshotId;
+    await assert.rejects(
+      revalidateConclusionAndPersist(blocked, "conclusion-penetration", workspaceDir),
+      (error: unknown) => error instanceof DomainError && error.code === "REVALIDATION_BLOCKED",
+    );
+
     const response = await fetch(`${baseUrl}/api/runs/${created.runId}/conclusions/conclusion-penetration/revalidate`, { method: "POST" });
     assert.equal(response.status, 200);
     const run = (await response.json() as { run: { conclusions: Array<{ id: string; freshness: string; evidenceStatus: string; reviewStatus: string; normalizedReviewStatus: string; confirmedAt: string | null }>; claims: Array<{ id: string; freshness: string }>; humanDecisions: unknown[]; artifactVersions: Array<{ trigger: string }> } }).run;
@@ -50,11 +68,14 @@ test("STALE conclusion can be revalidated against v2 without losing decision his
     assert.equal(run.claims.find((item) => item.id === "claim-penetration")?.freshness, "CURRENT");
     assert.equal(run.humanDecisions.length, stale.humanDecisions.length);
     assert.equal(run.artifactVersions.at(-1)?.trigger, "REVALIDATION");
+    const versions = await fetch(`${baseUrl}/api/runs/${created.runId}/artifact-versions`).then((item) => item.json()) as Array<{ trigger: string }>;
+    assert.equal(versions.at(-1)?.trigger, "revalidation");
 
     const persisted = JSON.parse(await readFile(join(workspaceDir, created.runId, "run.json"), "utf8")) as typeof run;
     assert.equal(persisted.conclusions.find((item) => item.id === "conclusion-penetration")?.freshness, "CURRENT");
     assert.equal((await fetch(`${baseUrl}/api/runs/${created.runId}/conclusions/conclusion-penetration/revalidate`, { method: "POST" })).status, 409);
     assert.equal((await fetch(`${baseUrl}/api/runs/${created.runId}/conclusions/missing/revalidate`, { method: "POST" })).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/runs/missing/conclusions/missing/revalidate`, { method: "POST" })).status, 404);
   } finally {
     await app.stop();
   }

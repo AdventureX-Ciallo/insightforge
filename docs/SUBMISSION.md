@@ -1,6 +1,6 @@
 # 黑客松提交材料
 
-> 状态：`CURRENT DRAFT — 后端契约与本地演示门禁已冻结，前端联调、最终 ZIP 和双轮干净验收待统一完成`。本文只陈述已有证据，不把缓存、模拟或本地验证写成线上成功。
+> 状态：`CURRENT DRAFT — React 前后端联调已通过，最终 ZIP 和双轮干净验收待完成`。本文只陈述已有证据，不把缓存、模拟或本地验证写成线上成功。
 
 ## 赛道与命题
 
@@ -30,7 +30,7 @@
 - JSZip 直接生成文字和形状可编辑的 PowerPoint OOXML。
 - PDF 报告采用纯 Node 的确定性 CID/ActualText 导出，不依赖 Python、ReportLab 或浏览器打印。
 - 本地 loopback HTTP 服务；所有任务写操作按 `runId` 串行化，避免人工编辑与来源更新并发覆盖。
-- 后端 SSE 已就绪：可流式输出五状态、工具事件、心跳和终态，并完成 run 隔离与断开清理；当前前端仍通过轮询刷新，不能声称已经消费 SSE。
+- React 工作台默认消费 SSE 五状态、工具事件和终态；流错误时自动回退轮询。后端完成订阅上限、run 隔离、心跳、空闲关流与断开清理。
 - 统一 `MAX_SOURCES=10`：三搜索引擎、单提供方搜索、离线快照、COLLECT 和证据包共同执行上限；第 11 个信源被截断并留下机器记录。
 - `npm run contract:check` 启动临时 loopback 服务，逐项真实调用联调契约并输出 PASS/FAIL 清单和 JSON 报告；标准 `npm run verify` 已强制包含该命令及确定性 fuzz，二者仍可单独重跑以生成各自报告。
 
@@ -38,12 +38,12 @@
 
 | 项目 | 当前证据 |
 |---|---|
-| Node 测试 | 163/163 PASS |
+| Node 测试 | 188/188 PASS |
 | 覆盖率 | `src/**` 语句、分支、函数、行四项均 100% |
-| Seeded fuzz | 694,100 例；6,931 行生产 TypeScript；100.14 例/行 |
-| 浏览器 E2E | 1/1 PASS；非默认端口真实 Chromium 黄金路径与下载 PPTX 解析通过，5.9 s |
+| Seeded fuzz | 737,500 例；7,365 行生产 TypeScript；100.14 例/行 |
+| 浏览器 E2E | 1/1 PASS；非默认端口真实 Chromium 完整 React 路径与下载 PPTX 解析通过，最新测试体 14.5 s、命令总耗时 23.1 s |
 | 稳定演示 | 黄金案例连续三次成功（88/20/16 ms） |
-| 联调合同 | 23/23 PASS；`npm run contract:check` 覆盖 SSE、presets、run、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、搜索合同及四格式下载 |
+| 联调合同 | 24/24 PASS；`npm run contract:check` 覆盖 CSRF 能力、request key、SSE、presets、run、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、搜索合同及四格式下载 |
 | 安全 | loopback、上传字节/路径/SHA、工具白名单、提示词注入、SSRF 预检和密钥扫描均有门禁 |
 
 ## 核心创新
@@ -58,8 +58,8 @@
 
 | 边界 | 当前状态 | 对外准确说法 |
 |---|---|---|
-| 前端衔接 | ABloom 仍在联调；后端合同已提供一键 harness | “后端纵向切片和契约已验，前端最终入口尚未冻结。” |
-| SSE | 后端接口与测试就绪，当前前端仍轮询 | “支持 SSE 运行事件；当前页面暂未接入。” |
+| 前端衔接 | ABloom React 工作台已并入统一安装、类型检查、构建与 E2E | “前后端主路径已联调；最终源码包仍待干净验收。” |
+| SSE | React 默认消费，错误时回退轮询 | “页面使用 SSE 展示运行事件，并保留轮询降级路径。” |
 | 真实搜索环境 | 当前机器的 Bing、Google、百度 DNS 返回 `198.18.0.0/15` fake-IP 代理保留段，产品在 fetch 前 fail-closed | “离线黄金案例稳定；当前代理环境未验证实时搜索成功。” |
 | 在线 LLM | 当前环境没有 API Key/Base URL/Model，未发起线上调用 | “黄金案例使用认证模型缓存；在线单端点成功仍待有 Key 环境验证。” |
 | 黄金资料 | 明确标记的合成离线演示资料 | “验证产品机制，不代表真实市场研究结论。” |
