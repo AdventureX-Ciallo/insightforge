@@ -47,6 +47,22 @@ function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 }
 
+test("reasoning-capable models receive enough output budget for PLAN and SYNTHESIZE", async () => {
+  const observed: number[] = [];
+  await withFetch(async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { max_tokens: number };
+    observed.push(body.max_tokens);
+    const content = observed.length === 1
+      ? JSON.stringify({ steps: [] })
+      : JSON.stringify({ conclusions: [] });
+    return jsonResponse({ choices: [{ message: { content } }] });
+  }, async () => {
+    await draftPlanSteps(config, planContext, 100, 0);
+    await draftConclusions(config, synthesisContext, 100, 0);
+  });
+  assert.deepEqual(observed, [8192, 16384]);
+});
+
 test("LLM config resolution rejects partial, malformed, HTTP, and credentialed endpoints", () => {
   assert.equal(resolveLlmConfig({}), null);
   assert.equal(resolveLlmConfig({ INSIGHTFORGE_LLM_API_KEY: " k ", INSIGHTFORGE_LLM_BASE_URL: "bad", INSIGHTFORGE_LLM_MODEL: " m " }), null);
@@ -54,6 +70,52 @@ test("LLM config resolution rejects partial, malformed, HTTP, and credentialed e
   assert.equal(resolveLlmConfig({ INSIGHTFORGE_LLM_API_KEY: "k", INSIGHTFORGE_LLM_BASE_URL: "https://user@model.test", INSIGHTFORGE_LLM_MODEL: "m" }), null);
   assert.equal(resolveLlmConfig({ INSIGHTFORGE_LLM_API_KEY: "k", INSIGHTFORGE_LLM_BASE_URL: "https://:pass@model.test", INSIGHTFORGE_LLM_MODEL: "m" }), null);
   assert.deepEqual(resolveLlmConfig({ INSIGHTFORGE_LLM_API_KEY: " k ", INSIGHTFORGE_LLM_BASE_URL: " https://model.test/v1 ", INSIGHTFORGE_LLM_MODEL: " m " }), { apiKey: "k", baseUrl: "https://model.test/v1", model: "m" });
+});
+
+test("operators can lower stage budgets for endpoints with smaller completion caps", async () => {
+  const resolved = resolveLlmConfig({
+    INSIGHTFORGE_LLM_API_KEY: "key",
+    INSIGHTFORGE_LLM_BASE_URL: "https://model.test/v1",
+    INSIGHTFORGE_LLM_MODEL: "small-cap-model",
+    INSIGHTFORGE_LLM_PLAN_MAX_TOKENS: "4096",
+    INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS: "8192",
+  });
+  assert.ok(resolved);
+  const observed: number[] = [];
+  await withFetch(async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { max_tokens: number; messages: Array<{ content: string }> };
+    observed.push(body.max_tokens);
+    const isPlan = body.messages.some((message) => message.content.startsWith("BEGIN_UNTRUSTED_PLAN_JSON"));
+    return jsonResponse({ choices: [{ message: { content: isPlan ? JSON.stringify({ steps: [] }) : JSON.stringify({ conclusions: [] }) } }] });
+  }, async () => {
+    await draftPlanSteps(resolved, planContext, 100, 0);
+    await draftConclusions(resolved, synthesisContext, 100, 0);
+  });
+  assert.deepEqual(observed, [4096, 8192]);
+  assert.equal(resolveLlmConfig({
+    INSIGHTFORGE_LLM_API_KEY: "key",
+    INSIGHTFORGE_LLM_BASE_URL: "https://model.test/v1",
+    INSIGHTFORGE_LLM_MODEL: "bad-cap-model",
+    INSIGHTFORGE_LLM_PLAN_MAX_TOKENS: "0",
+  }), null);
+  assert.equal(resolveLlmConfig({
+    INSIGHTFORGE_LLM_API_KEY: "key",
+    INSIGHTFORGE_LLM_BASE_URL: "https://model.test/v1",
+    INSIGHTFORGE_LLM_MODEL: "bad-cap-model",
+    INSIGHTFORGE_LLM_PLAN_MAX_TOKENS: "not-a-number",
+  }), null);
+  assert.deepEqual(resolveLlmConfig({
+    INSIGHTFORGE_LLM_API_KEY: "key",
+    INSIGHTFORGE_LLM_BASE_URL: "https://model.test/v1",
+    INSIGHTFORGE_LLM_MODEL: "empty-cap-means-default",
+    INSIGHTFORGE_LLM_PLAN_MAX_TOKENS: "   ",
+  }), { apiKey: "key", baseUrl: "https://model.test/v1", model: "empty-cap-means-default" });
+  let invalidCalls = 0;
+  await assert.rejects(withFetch(async () => {
+    invalidCalls += 1;
+    return jsonResponse({});
+  }, () => draftPlanSteps({ ...config, planMaxTokens: 255 }, planContext, 100, 0)), /token budget/u);
+  assert.equal(invalidCalls, 0, "invalid programmatic config must fail before external transfer");
 });
 
 test("LLM transport does not retry 4xx and retries 429, 5xx, network, and non-Error failures exactly once", async () => {
@@ -178,6 +240,27 @@ test("draft validation deduplicates normalized candidate text before applying th
   ]);
 });
 
+test("deterministic validation rejects oversized model drafts before persistence", () => {
+  const valid = { text: "边界内候选判断，等待人工复核。", evidenceIds: ["e1"], assumptions: ["边界内假设"], missingEvidence: ["边界内缺口"] };
+  const drafts = [
+    valid,
+    { ...valid, text: "结".repeat(2_001) },
+    { ...valid, assumptions: ["假".repeat(501)] },
+    { ...valid, missingEvidence: Array.from({ length: 11 }, (_, index) => `缺口-${index}`) },
+    { ...valid, evidenceIds: Array.from({ length: 21 }, (_, index) => `e${index}`) },
+  ];
+  assert.deepEqual(validateLlmDrafts(drafts, Array.from({ length: 21 }, (_, index) => `e${index}`)), [valid]);
+
+  const basePlan = [
+    { objective: "发现与问题相关的公开信源", toolName: "snapshot-search", expectedOutput: "候选信源" },
+    { objective: "执行确定性的结构化证据审查", toolName: "deterministic-audit", expectedOutput: "审查结果" },
+    { objective: "生成最终可编辑的研究交付成果", toolName: "pptx-generator", expectedOutput: "PPTX" },
+  ];
+  assert.ok(validatePlanSteps(basePlan, PLAN_TOOL_ALLOWLIST));
+  assert.equal(validatePlanSteps([{ ...basePlan[0]!, objective: "步".repeat(501) }, ...basePlan.slice(1)], PLAN_TOOL_ALLOWLIST), null);
+  assert.equal(validatePlanSteps([{ ...basePlan[0]!, expectedOutput: "出".repeat(501) }, ...basePlan.slice(1)], PLAN_TOOL_ALLOWLIST), null);
+});
+
 test("low-fit auto mode records the live PLAN disclosure and an explicit no-SYNTHESIZE refusal", async () => {
   let calls = 0;
   const unrelatedQuestion = "半导体光刻胶国产替代率的瓶颈与成本曲线如何变化？";
@@ -204,6 +287,8 @@ test("low-fit auto mode records the live PLAN disclosure and an explicit no-SYNT
   assert.equal(run.synthesisMode, "DETERMINISTIC_MISMATCH_BLOCK");
   assert.equal(run.modelProvenance.planSource, "LIVE_SINGLE_ENDPOINT");
   assert.equal(run.modelProvenance.synthesisSource, "DETERMINISTIC_MISMATCH_BLOCK");
+  assert.equal(run.modelProvenance.planMaxTokens, 8192);
+  assert.equal(run.modelProvenance.synthesisMaxTokens, undefined);
   assert.deepEqual(run.modelProvenance.dataDisclosure?.stages, ["PLAN"]);
   assert.match(run.modelProvenance.routingNotice ?? "", /未发送 SYNTHESIZE/u);
   assert.equal(run.events.some((event) => event.toolName === "llm-synthesizer"), false);

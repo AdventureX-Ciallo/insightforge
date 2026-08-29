@@ -95,9 +95,9 @@ Audit 覆盖：
 
 ## 当前验证状态
 
-- 最新全量 Node 结果为 159/159；Path 1–6 显式对抗矩阵 6/6；`src/**` 四项覆盖率均为 100%。
+- 最新全量 Node 结果为 163/163；Path 1–6 显式对抗矩阵 6/6；`src/**` 四项覆盖率均为 100%。
 - c8 对 `src/**` 的语句、分支、函数、行覆盖率均为 100%，`npm run coverage` 对四项都执行 100% 失败阈值。
-- 物理行统计：生产 TypeScript 6,840 行，Node/fuzz 测试 TypeScript 6,604 行；测试/生产代码比为 0.965:1（96.5%）；计入 97 行 E2E 后为 98.0%。
+- 物理行统计：生产 TypeScript 6,931 行，Node/fuzz 测试 TypeScript 6,926 行；测试/生产代码比为 0.999:1（99.9%）；计入 97 行 E2E 后为 1.013:1（101.3%）。
 - TypeScript、生产构建、smoke 与三连演示已通过。`npm run test:e2e` 新鲜通过 1/1（5.9 s），并解析下载的五页 PPTX 与画布对象。
 - 当前环境对 Bing、Google、百度的真实只读查询均因 DNS 返回 `198.18.0.0/15` fake-IP 而在 fetch 前 fail-closed，未取得新的搜索成功；2026-08-27 的单提供方成功与白名单 2/4 成功仅为历史网络证据，不能替代当前环境结果。
 - 最新联网证据见 `docs/verification/LIVE-SOURCE-VERIFICATION-2026-08-27.md`。

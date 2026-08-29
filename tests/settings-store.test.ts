@@ -27,6 +27,35 @@ test("settings validation rejects absent, malformed, credentialed, or unsafe end
   await rejectsInput({ ...valid, baseUrl: "https://:password@models.example.test/v1" }, /embedded credentials/u);
 });
 
+test("API settings persist validated optional PLAN and SYNTHESIZE token budgets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "insightforge-settings-budgets-"));
+  const saved = await saveApiLlmSettings(directory, {
+    ...valid,
+    planMaxTokens: 4096,
+    synthesisMaxTokens: 8192,
+  });
+  assert.deepEqual(saved, {
+    baseUrl: "https://models.example.test/v1",
+    model: valid.model,
+    apiKey: valid.apiKey,
+    planMaxTokens: 4096,
+    synthesisMaxTokens: 8192,
+  });
+  assert.deepEqual(await loadApiLlmSettings(directory), saved);
+  assert.deepEqual(publicLlmSettings(saved, Object.create(null) as NodeJS.ProcessEnv), {
+    configured: true,
+    source: "api",
+    baseUrlMasked: "https://m••••t",
+    modelMasked: "j••••l",
+    apiKeyMasked: "••••1234",
+    planMaxTokens: 4096,
+    synthesisMaxTokens: 8192,
+  });
+  await rejectsInput({ ...valid, planMaxTokens: 255 }, /token budgets/u);
+  await rejectsInput({ ...valid, synthesisMaxTokens: 32769 }, /token budgets/u);
+  await rejectsInput({ ...valid, planMaxTokens: "4096" }, /token budgets/u);
+});
+
 test("settings load fails closed for unreadable, malformed, and semantically invalid stored state", async () => {
   const missing = await mkdtemp(join(tmpdir(), "insightforge-settings-missing-"));
   assert.equal(await loadApiLlmSettings(missing), null);
@@ -65,6 +94,8 @@ test("public settings expose only masks and preserve API over environment priori
     baseUrlMasked: "https://e••••t",
     modelMasked: "e••••l",
     apiKeyMasked: "••••cret",
+    planMaxTokens: 8192,
+    synthesisMaxTokens: 16384,
   });
   assert.deepEqual(publicLlmSettings(valid, env), {
     configured: true,
@@ -72,6 +103,8 @@ test("public settings expose only masks and preserve API over environment priori
     baseUrlMasked: "https://m••••t",
     modelMasked: "j••••l",
     apiKeyMasked: "••••1234",
+    planMaxTokens: 8192,
+    synthesisMaxTokens: 16384,
   });
   assert.deepEqual(publicLlmSettings({ baseUrl: "https://x", model: "xy", apiKey: "12345678" }, emptyEnv), {
     configured: true,
@@ -79,5 +112,7 @@ test("public settings expose only masks and preserve API over environment priori
     baseUrlMasked: "https://••••",
     modelMasked: "••••",
     apiKeyMasked: "••••5678",
+    planMaxTokens: 8192,
+    synthesisMaxTokens: 16384,
   });
 });

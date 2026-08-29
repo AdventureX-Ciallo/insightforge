@@ -68,7 +68,8 @@ test("LLM settings are masked, persisted 0600, preferred over env, and used by t
       maxTokens: body.max_tokens,
       promptSha256: createHash("sha256").update(JSON.stringify(body.messages)).digest("hex"),
     });
-    const content = body.max_tokens === 2048
+    const isPlan = body.messages.some((message) => message.content.startsWith("BEGIN_UNTRUSTED_PLAN_JSON"));
+    const content = isPlan
       ? JSON.stringify({ steps: [
         { objective: "检索与问题直接相关的公开信源", toolName: "snapshot-search", expectedOutput: "候选信源" },
         { objective: "执行确定性的六类证据审查", toolName: "deterministic-audit", expectedOutput: "审查结果" },
@@ -100,7 +101,13 @@ test("LLM settings are masked, persisted 0600, preferred over env, and used by t
     const configured = await fetch(`${baseUrl}/api/settings/llm`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseUrl: "https://llm.example.com/v1/", model: "api-model", apiKey: fixtureKey }),
+      body: JSON.stringify({
+        baseUrl: "https://llm.example.com/v1/",
+        model: "api-model",
+        apiKey: fixtureKey,
+        planMaxTokens: 4096,
+        synthesisMaxTokens: 8192,
+      }),
     });
     assert.equal(configured.status, 200);
     const configuredText = await configured.text();
@@ -108,10 +115,15 @@ test("LLM settings are masked, persisted 0600, preferred over env, and used by t
     assert.equal(configuredText.includes("llm.example.com"), false);
     assert.equal(configuredText.includes("api-model"), false);
     assert.match(configuredText, /•{4}-key/u);
+    assert.match(configuredText, /"planMaxTokens":4096/u);
+    assert.match(configuredText, /"synthesisMaxTokens":8192/u);
 
     const settingsPath = join(workspaceDir, "settings.json");
     assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
-    assert.equal((JSON.parse(await readFile(settingsPath, "utf8")) as { llm: { apiKey: string } }).llm.apiKey, fixtureKey);
+    const stored = (JSON.parse(await readFile(settingsPath, "utf8")) as { llm: { apiKey: string; planMaxTokens: number; synthesisMaxTokens: number } }).llm;
+    assert.equal(stored.apiKey, fixtureKey);
+    assert.equal(stored.planMaxTokens, 4096);
+    assert.equal(stored.synthesisMaxTokens, 8192);
     const getText = await (await fetch(`${baseUrl}/api/settings/llm`)).text();
     assert.equal(getText.includes(fixtureKey), false);
     assert.equal(getText.includes("llm.example.com"), false);
@@ -128,8 +140,10 @@ test("LLM settings are masked, persisted 0600, preferred over env, and used by t
     assert.ok(run.events.some((item) => item.toolName === "llm-planner"));
     assert.ok(run.events.some((item) => item.toolName === "llm-synthesizer"));
     assert.deepEqual(run.modelProvenance, { ...run.modelProvenance, model: "api-model", provider: "llm.example.com" });
-    const observedPlan = observed.find((item) => item.maxTokens === 2048);
-    const observedSynthesis = observed.find((item) => item.maxTokens === 4096);
+    assert.equal(run.modelProvenance.planMaxTokens, 4096);
+    assert.equal(run.modelProvenance.synthesisMaxTokens, 8192);
+    const observedPlan = observed.find((item) => item.maxTokens === 4096);
+    const observedSynthesis = observed.find((item) => item.maxTokens === 8192);
     assert.ok(observedPlan && observedSynthesis);
     assert.equal(run.modelProvenance.planPromptSha256, observedPlan.promptSha256);
     assert.equal(run.modelProvenance.synthesisPromptSha256, observedSynthesis.promptSha256);

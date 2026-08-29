@@ -86,7 +86,7 @@
 
 | 前端展示 | 后端契约 | 验收 |
 |---|---|---|
-| 端点配置表单（baseUrl / model / apiKey） | `GET/POST /api/settings/llm`（路线图 P2-4）；配置落 `.insightforge/settings.json`（gitignore），优先级：API 设置 > 环境变量 | GET 永不回显明文 key（掩码）；配置后下轮 run 出现模型工具事件；未配置行为与离线基线一致 |
+| 端点配置表单（baseUrl / model / apiKey；可选 PLAN/SYNTHESIZE token 预算） | `GET/POST /api/settings/llm`（路线图 P2-4）；可选 `planMaxTokens / synthesisMaxTokens` 为 256–32768 整数，默认 8192/16384；配置落 `.insightforge/settings.json`（gitignore），API 设置整体优先于环境变量 | GET 永不回显明文 key（掩码），预算原值可见；配置后下轮 run 出现模型工具事件并在 `modelProvenance` 留下实际预算；未配置行为与离线基线一致 |
 
 ## 信源置信度权重（贯穿路径 2/5/6）
 

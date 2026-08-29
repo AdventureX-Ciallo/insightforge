@@ -11,8 +11,8 @@ const GOLDEN_QUESTION = "中国新能源乘用车渗透率增长是否受到公�
 function installLiveModelStub() {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { max_tokens: number };
-    const content = body.max_tokens === 2048
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+    const content = body.messages.some((message) => message.content.startsWith("BEGIN_UNTRUSTED_PLAN_JSON"))
       ? JSON.stringify({ steps: [
         { objective: "检索与问题直接相关的公开信源", toolName: "snapshot-search", expectedOutput: "候选信源" },
         { objective: "执行确定性的六类证据审查", toolName: "deterministic-audit", expectedOutput: "审查结果" },

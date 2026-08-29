@@ -25,11 +25,13 @@ import { MAX_SOURCES, truncateSources } from "./source-limit.js";
 import {
   draftConclusions,
   draftPlanSteps,
+  PLAN_MAX_TOKENS,
   PLAN_TOOL_ALLOWLIST,
   promptMessagesSha256,
   renderConclusionMessages,
   renderPlanMessages,
   resolveLlmConfig,
+  SYNTHESIS_MAX_TOKENS,
   validateLlmDrafts,
   validatePlanSteps,
   type LlmConfig,
@@ -396,7 +398,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
       synthesis = bundleFromLlmDrafts(valid, { data: seed.data, sources, evidence });
       synthesis.assumptions.push(...seed.assumptions);
       synthesisMode = "LIVE_SINGLE_ENDPOINT";
-      modelProvenance = { planSource: "LIVE_SINGLE_ENDPOINT", synthesisSource: "LIVE_SINGLE_ENDPOINT", provider: new URL(config.baseUrl).hostname, model: config.model, generatedAt: isoNow(), promptSha256: synthesisPromptSha256, planPromptSha256: livePlanPromptSha256!, synthesisPromptSha256, outputSha256: hashValue(valid), cacheFile: null, routingNotice: "PLAN 与 SYNTHESIZE 均调用同一在线端点；发送字段已最小化并在 dataDisclosure 留痕。", dataDisclosure: modelDataDisclosure(["PLAN", "SYNTHESIZE"]) };
+      modelProvenance = { planSource: "LIVE_SINGLE_ENDPOINT", synthesisSource: "LIVE_SINGLE_ENDPOINT", provider: new URL(config.baseUrl).hostname, model: config.model, generatedAt: isoNow(), promptSha256: synthesisPromptSha256, planPromptSha256: livePlanPromptSha256!, synthesisPromptSha256, planMaxTokens: config.planMaxTokens ?? PLAN_MAX_TOKENS, synthesisMaxTokens: config.synthesisMaxTokens ?? SYNTHESIS_MAX_TOKENS, outputSha256: hashValue(valid), cacheFile: null, routingNotice: "PLAN 与 SYNTHESIZE 均调用同一在线端点；发送字段已最小化并在 dataDisclosure 留痕。", dataDisclosure: modelDataDisclosure(["PLAN", "SYNTHESIZE"]) };
     } else if (llmMode === "off" && exactGolden) {
       synthesis = seed;
       synthesisMode = "DETERMINISTIC_GOLDEN_RULES";
@@ -424,6 +426,7 @@ export async function runGoldenCase(options: RunGoldenCaseOptions): Promise<Rese
           promptSha256: noSynthesisDigest,
           planPromptSha256: livePlanPromptSha256!,
           synthesisPromptSha256: noSynthesisDigest,
+          planMaxTokens: config.planMaxTokens ?? PLAN_MAX_TOKENS,
           outputSha256: hashValue(synthesis),
           cacheFile: null,
           routingNotice: `在线 PLAN 已调用；证据匹配度 ${(fit * 100).toFixed(0)}% 低于阈值 ${(FIT_THRESHOLD * 100).toFixed(0)}%，因此未发送 SYNTHESIZE 请求，并以确定性证据缺口拒答。`,

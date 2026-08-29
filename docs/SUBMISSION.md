@@ -38,9 +38,9 @@
 
 | 项目 | 当前证据 |
 |---|---|
-| Node 测试 | 159/159 PASS |
+| Node 测试 | 163/163 PASS |
 | 覆盖率 | `src/**` 语句、分支、函数、行四项均 100% |
-| Seeded fuzz | 685,000 例；6,840 行生产 TypeScript；100.15 例/行 |
+| Seeded fuzz | 694,100 例；6,931 行生产 TypeScript；100.14 例/行 |
 | 浏览器 E2E | 1/1 PASS；非默认端口真实 Chromium 黄金路径与下载 PPTX 解析通过，5.9 s |
 | 稳定演示 | 黄金案例连续三次成功（88/20/16 ms） |
 | 联调合同 | 23/23 PASS；`npm run contract:check` 覆盖 SSE、presets、run、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、搜索合同及四格式下载 |

@@ -6,6 +6,43 @@ export interface LlmConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
+  planMaxTokens?: number;
+  synthesisMaxTokens?: number;
+}
+
+// OpenAI-compatible reasoning endpoints charge hidden reasoning and visible JSON
+// against the same completion budget. These stage-specific defaults are the
+// smallest values verified to let the supported reasoning-model flow finish.
+export const PLAN_MAX_TOKENS = 8192;
+export const SYNTHESIS_MAX_TOKENS = 16384;
+export const MIN_LLM_MAX_TOKENS = 256;
+export const MAX_LLM_MAX_TOKENS = 32768;
+export const MAX_LLM_DRAFT_TEXT_LENGTH = 2000;
+export const MAX_LLM_DRAFT_AUXILIARY_LENGTH = 500;
+export const MAX_LLM_DRAFT_AUXILIARY_ITEMS = 10;
+export const MAX_LLM_DRAFT_EVIDENCE_IDS = 20;
+export const MAX_LLM_PLAN_FIELD_LENGTH = 500;
+
+export function isValidLlmTokenBudget(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= MIN_LLM_MAX_TOKENS
+    && value <= MAX_LLM_MAX_TOKENS;
+}
+
+function envTokenBudget(value: string | undefined): number | null | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  if (!/^\d+$/u.test(value.trim())) return null;
+  const parsed = Number(value.trim());
+  return isValidLlmTokenBudget(parsed) ? parsed : null;
+}
+
+function effectiveTokenBudget(value: number | undefined, fallback: number): number {
+  const budget = value ?? fallback;
+  if (!isValidLlmTokenBudget(budget)) {
+    throw new Error(`LLM token budget must be an integer between ${MIN_LLM_MAX_TOKENS} and ${MAX_LLM_MAX_TOKENS}`);
+  }
+  return budget;
 }
 
 export interface LlmDraft {
@@ -20,6 +57,9 @@ export function resolveLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfi
   const baseUrl = env.INSIGHTFORGE_LLM_BASE_URL?.trim();
   const model = env.INSIGHTFORGE_LLM_MODEL?.trim();
   if (!apiKey || !baseUrl || !model) return null;
+  const planMaxTokens = envTokenBudget(env.INSIGHTFORGE_LLM_PLAN_MAX_TOKENS);
+  const synthesisMaxTokens = envTokenBudget(env.INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS);
+  if (planMaxTokens === null || synthesisMaxTokens === null) return null;
   let endpoint: URL;
   try {
     endpoint = new URL(baseUrl);
@@ -27,7 +67,13 @@ export function resolveLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfi
     return null;
   }
   if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) return null;
-  return { baseUrl, model, apiKey };
+  return {
+    baseUrl,
+    model,
+    apiKey,
+    ...(planMaxTokens === undefined ? {} : { planMaxTokens }),
+    ...(synthesisMaxTokens === undefined ? {} : { synthesisMaxTokens }),
+  };
 }
 
 export interface LlmSynthesisContext {
@@ -100,7 +146,8 @@ const PLAN_SYSTEM_PROMPT = [
   "2. 输出 3-7 个步骤，每步包含 objective（做什么）、toolName（用哪个工具）、expectedOutput（产出什么）。",
   "3. 必须包含一个 deterministic-audit 审查步骤和一个 pptx-generator 交付步骤，且交付在最后。",
   "4. 计划要贴合研究问题：明确该问题需要哪些信源、数据与计算，不要输出与问题无关的通用步骤。",
-  '5. 只输出 JSON：{"steps":[{"objective":"...","toolName":"...","expectedOutput":"..."}]}',
+  "5. 每个 objective 和 expectedOutput 不超过 500 个字符。",
+  '6. 只输出 JSON：{"steps":[{"objective":"...","toolName":"...","expectedOutput":"..."}]}',
 ].join("\n");
 
 function compactContext(context: LlmSynthesisContext): string {
@@ -141,7 +188,8 @@ const SYSTEM_PROMPT = [
   "2. 提出 3-5 条候选结论；每条给出支撑它的 evidenceIds。",
   "3. 使用了估算或假设的，必须在 assumptions 中写明；证据不足的方面，把缺口写进 missingEvidence，不要硬下结论。",
   "4. 区分事实与判断：你输出的所有内容都只会被标记为 AI_JUDGMENT，不得自称已证实。",
-  '5. 只输出 JSON：{"conclusions":[{"text":"...","evidenceIds":["..."],"assumptions":["..."],"missingEvidence":["..."]}]}',
+  "5. 每条 text 不超过 2000 字符；evidenceIds 最多 20 个；assumptions 和 missingEvidence 各最多 10 项、单项不超过 500 字符。",
+  '6. 只输出 JSON：{"conclusions":[{"text":"...","evidenceIds":["..."],"assumptions":["..."],"missingEvidence":["..."]}]}',
 ].join("\n");
 
 interface ChatCompletionResponse {
@@ -222,7 +270,7 @@ export async function draftConclusions(config: LlmConfig, context: LlmSynthesisC
     model: config.model,
     temperature: 0.2,
     // 推理型模型会先消耗思考 token 再输出 content；预算不足会在 content 为空时被截断。
-    max_tokens: 4096,
+    max_tokens: effectiveTokenBudget(config.synthesisMaxTokens, SYNTHESIS_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderConclusionMessages(context),
   }, timeoutMs, retryDelayMs);
@@ -250,7 +298,13 @@ export function validateLlmDrafts(drafts: LlmDraft[], knownEvidenceIds: string[]
   const known = new Set(knownEvidenceIds);
   const seen = new Set<string>();
   return drafts
-    .filter((draft) => draft.text.length >= 8 && draft.evidenceIds.length > 0)
+    .filter((draft) => draft.text.length >= 8 && draft.text.length <= MAX_LLM_DRAFT_TEXT_LENGTH)
+    .filter((draft) => draft.evidenceIds.length > 0
+      && draft.evidenceIds.length <= MAX_LLM_DRAFT_EVIDENCE_IDS
+      && draft.evidenceIds.every((id) => id.length > 0 && id.length <= MAX_LLM_DRAFT_AUXILIARY_LENGTH))
+    .filter((draft) => draft.assumptions.length <= MAX_LLM_DRAFT_AUXILIARY_ITEMS
+      && draft.missingEvidence.length <= MAX_LLM_DRAFT_AUXILIARY_ITEMS
+      && [...draft.assumptions, ...draft.missingEvidence].every((value) => value.length <= MAX_LLM_DRAFT_AUXILIARY_LENGTH))
     .filter((draft) => ![draft.text, ...draft.assumptions, ...draft.missingEvidence].some(containsPromptInjectionEcho))
     .filter((draft) => draft.evidenceIds.every((id) => known.has(id)))
     .filter((draft) => {
@@ -271,7 +325,7 @@ export async function draftPlanSteps(config: LlmConfig, context: LlmPlanContext,
     model: config.model,
     temperature: 0.2,
     // 推理型模型会先消耗思考 token 再输出 content；预算不足会在 content 为空时被截断。
-    max_tokens: 2048,
+    max_tokens: effectiveTokenBudget(config.planMaxTokens, PLAN_MAX_TOKENS),
     response_format: { type: "json_object" },
     messages: renderPlanMessages(context),
   }, timeoutMs, retryDelayMs);
@@ -299,7 +353,9 @@ export function validatePlanSteps(drafts: PlanStepDraft[], allowlist: readonly s
   if (drafts.length < 3 || drafts.length > 7) return null;
   if (drafts.some((draft) => !allowed.has(draft.toolName)
     || draft.objective.length < 6
+    || draft.objective.length > MAX_LLM_PLAN_FIELD_LENGTH
     || draft.expectedOutput.length < 2
+    || draft.expectedOutput.length > MAX_LLM_PLAN_FIELD_LENGTH
     || [draft.objective, draft.toolName, draft.expectedOutput].some(containsPromptInjectionEcho))) return null;
   const valid = drafts;
   const auditCount = valid.filter((draft) => draft.toolName === "deterministic-audit").length;

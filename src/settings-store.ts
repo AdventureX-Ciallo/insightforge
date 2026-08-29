@@ -4,7 +4,13 @@ import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
-import { resolveLlmConfig, type LlmConfig } from "./llm.js";
+import {
+  isValidLlmTokenBudget,
+  PLAN_MAX_TOKENS,
+  resolveLlmConfig,
+  SYNTHESIS_MAX_TOKENS,
+  type LlmConfig,
+} from "./llm.js";
 
 const storedSettingsSchema = z.object({
   schemaVersion: z.literal("1.0"),
@@ -12,6 +18,8 @@ const storedSettingsSchema = z.object({
     baseUrl: z.string().min(1),
     model: z.string().min(1),
     apiKey: z.string().min(8),
+    planMaxTokens: z.number().int().optional(),
+    synthesisMaxTokens: z.number().int().optional(),
     updatedAt: z.string().datetime(),
   }).strict(),
 }).strict();
@@ -38,7 +46,19 @@ function normalizedConfig(input: Record<string, unknown>): LlmConfig {
   if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || !endpoint.hostname) {
     throw new SettingsStoreError(400, "LLM baseUrl must use HTTPS without embedded credentials");
   }
-  return { baseUrl: rawBaseUrl, model, apiKey };
+  const planMaxTokens = input.planMaxTokens;
+  const synthesisMaxTokens = input.synthesisMaxTokens;
+  if ((planMaxTokens !== undefined && !isValidLlmTokenBudget(planMaxTokens))
+    || (synthesisMaxTokens !== undefined && !isValidLlmTokenBudget(synthesisMaxTokens))) {
+    throw new SettingsStoreError(400, "LLM token budgets must be integers between 256 and 32768");
+  }
+  return {
+    baseUrl: rawBaseUrl,
+    model,
+    apiKey,
+    ...(planMaxTokens === undefined ? {} : { planMaxTokens }),
+    ...(synthesisMaxTokens === undefined ? {} : { synthesisMaxTokens }),
+  };
 }
 
 export function maskApiKey(apiKey: string) {
@@ -89,6 +109,14 @@ export function publicLlmSettings(apiConfig: LlmConfig | null, env: NodeJS.Proce
   const envConfig = resolveLlmConfig(env);
   const effective = apiConfig ?? envConfig;
   return effective
-    ? { configured: true, source: apiConfig ? "api" : "environment", baseUrlMasked: maskBaseUrl(effective.baseUrl), modelMasked: maskSetting(effective.model), apiKeyMasked: maskApiKey(effective.apiKey) }
+    ? {
+      configured: true,
+      source: apiConfig ? "api" : "environment",
+      baseUrlMasked: maskBaseUrl(effective.baseUrl),
+      modelMasked: maskSetting(effective.model),
+      apiKeyMasked: maskApiKey(effective.apiKey),
+      planMaxTokens: effective.planMaxTokens ?? PLAN_MAX_TOKENS,
+      synthesisMaxTokens: effective.synthesisMaxTokens ?? SYNTHESIS_MAX_TOKENS,
+    }
     : { configured: false, source: "none", baseUrlMasked: null, modelMasked: null, apiKeyMasked: null };
 }

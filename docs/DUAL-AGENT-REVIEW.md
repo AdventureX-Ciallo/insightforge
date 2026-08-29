@@ -85,7 +85,7 @@ The external review usefully highlighted that an upload policy without a browser
 - unit, HTTP integration and Playwright coverage for the upload loop.
 - SSE step/tool streaming with heartbeat, disconnect cleanup and run isolation;
 - a ten-source hard cap enforced by Schema, engine and HTTP API;
-- 685,000 fixed-seed fuzz cases across seven suites, including at least 6,000 complete-graph single-edge mutations, output-chain/state-axis invariants, human-decision idempotency, pure Audit transforms, and DNS-fallback stop-chain checks;
+- 694,100 fixed-seed fuzz cases across eight suites, including at least 6,000 complete-graph single-edge mutations, output-chain/state-axis invariants, human-decision idempotency, LLM budget/field boundaries, pure Audit transforms, and DNS-fallback stop-chain checks;
 - per-run serialization of human-decision and source-update writes after E2E exposed a real lost-update race;
 - deterministic pure-Node PDF generation with no Python/ReportLab or production Chromium dependency.
 

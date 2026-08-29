@@ -7,6 +7,7 @@ import { runAuditFuzz } from "./audit.fuzz.js";
 import { runEngineFuzz } from "./engine.fuzz.js";
 import { runSuite, type FuzzSuiteResult, invariant } from "./harness.js";
 import { runHumanDecisionFuzz } from "./human-decision.fuzz.js";
+import { runLlmBudgetFuzz } from "./llm-budget.fuzz.js";
 import { runSsrfFuzz } from "./ssrf.fuzz.js";
 import { runStructureFuzz } from "./structure.fuzz.js";
 import { runUploadFuzz } from "./upload.fuzz.js";
@@ -14,6 +15,7 @@ import { runUploadFuzz } from "./upload.fuzz.js";
 const CASES = {
   engine: 30,
   humanDecision: 1_000,
+  llmBudget: 1_000,
   structure: 246_000,
   api: 5_000,
   audit: 104_000,
@@ -53,7 +55,7 @@ async function main() {
   const started = performance.now();
   const results: FuzzSuiteResult[] = [];
   const lines = await sourceLines(resolve("src"));
-  const nonStructureCases = CASES.engine + CASES.humanDecision + CASES.api + CASES.audit + CASES.upload + CASES.ssrf;
+  const nonStructureCases = CASES.engine + CASES.humanDecision + CASES.llmBudget + CASES.api + CASES.audit + CASES.upload + CASES.ssrf;
   const structureCases = Math.max(CASES.structure, lines * 100 - nonStructureCases + 1_000);
 
   const engine = await runSuite(options.seed, "engine-random-walk", (rng) => runEngineFuzz(rng, CASES.engine), ["injected failures propagate", "terminal status remains one of three", "step consumption chain remains intact"]);
@@ -62,6 +64,8 @@ async function main() {
   results.push(structure.result);
   const humanDecision = await runSuite(options.seed, "human-decision-idempotency", (rng) => runHumanDecisionFuzz(rng, CASES.humanDecision, engine.value), ["final decisions reject same-action replay", "final decisions reject cross-terminal flips", "EDIT explicitly reopens review"]);
   results.push(humanDecision.result);
+  const llmBudget = await runSuite(options.seed, "llm-reasoning-budget", (rng) => runLlmBudgetFuzz(rng, CASES.llmBudget), ["default PLAN/SYNTHESIZE budgets remain 8192/16384", "random valid per-stage overrides reach the request unchanged", "random untrusted context cannot alter either stage budget", "random oversized drafts and PLAN fields fail closed before persistence"]);
+  results.push(llmBudget.result);
   const api = await runSuite(options.seed, "http-api", (rng) => runApiFuzz(rng, CASES.api), ["random methods, paths, encodings, NUL and bodies never return 5xx", "server remains healthy"]);
   results.push(api.result);
   const audit = await runSuite(options.seed, "audit-mutation", (rng) => runAuditFuzz(rng, CASES.audit), ["unsupported AI judgment downgrades", "same-period different values conflict", "input mutation changes audit output"]);

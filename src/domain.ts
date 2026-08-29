@@ -334,6 +334,8 @@ export interface ModelProvenance {
   promptSha256: string;
   planPromptSha256?: string | undefined;
   synthesisPromptSha256?: string | undefined;
+  planMaxTokens?: number | undefined;
+  synthesisMaxTokens?: number | undefined;
   outputSha256: string;
   cacheFile: string | null;
   routingNotice?: string | undefined;
@@ -723,6 +725,8 @@ export const modelProvenanceSchema = z.object({
   promptSha256: z.string().regex(/^[a-f0-9]{64}$/),
   planPromptSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   synthesisPromptSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  planMaxTokens: z.number().int().min(256).max(32768).optional(),
+  synthesisMaxTokens: z.number().int().min(256).max(32768).optional(),
   outputSha256: z.string().regex(/^[a-f0-9]{64}$/),
   cacheFile: z.string().nullable(),
   routingNotice: z.string().min(1).optional(),

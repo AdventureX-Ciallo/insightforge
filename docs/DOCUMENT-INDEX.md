@@ -68,6 +68,7 @@
 - `VERIFICATION-EVIDENCE.md`
 - `ISSUE-RESOLUTION-AUDIT-0828.md`
 - `ABLOOM-ISSUE-AUDIT.md`
+- `verification/ABLOOM-43-STEPFUN-LIVE-2026-08-29.md`
 - `DUAL-AGENT-REVIEW.md`
 
 在恢复开发前，需要把其中所有“PASS/完成/已实现”与冻结需求重新核对。没有新鲜入口证据的历史结论不得继承为完成状态。

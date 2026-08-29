@@ -323,15 +323,15 @@ try {
     const body = await jsonRequest("/api/settings/llm", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseUrl: "https://model.contract.invalid/v1", model: "contract-model", apiKey: contractOnlyToken }),
+      body: JSON.stringify({ baseUrl: "https://model.contract.invalid/v1", model: "contract-model", apiKey: contractOnlyToken, planMaxTokens: 4096, synthesisMaxTokens: 8192 }),
     });
-    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && body.baseUrlMasked && body.modelMasked && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "settings POST did not return a masked contract", body);
+    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && body.baseUrlMasked && body.modelMasked && body.planMaxTokens === 4096 && body.synthesisMaxTokens === 8192 && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "settings POST did not return a masked token-budget contract", body);
     return body;
   });
 
   await check("llm-settings-read-masked", "GET", "/api/settings/llm", async () => {
     const body = await jsonRequest("/api/settings/llm");
-    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && body.baseUrlMasked && body.modelMasked && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "persisted settings GET did not stay masked", body);
+    requireContract(body.configured === true && body.source === "api" && body.apiKeyMasked?.endsWith(contractOnlyToken.slice(-4)) && body.baseUrlMasked && body.modelMasked && body.planMaxTokens === 4096 && body.synthesisMaxTokens === 8192 && !["apiKey", "baseUrl", "model"].some((key) => Object.hasOwn(body, key)), "persisted settings GET did not stay masked or retain token budgets", body);
     return body;
   });
 } catch (error) {

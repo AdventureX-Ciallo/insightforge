@@ -1,8 +1,8 @@
 # InsightForge
 
-> 当前状态（2026-08-29）：后端纵向切片已实现；本地 159/159 Node 测试、`src/**` 四项覆盖率 100%、23/23 契约、685,000 例 fuzz、非默认端口 Playwright E2E 1/1、smoke、三连演示和 173 文件密钥扫描通过，依赖审计为 0 漏洞；前端仍由 ABloom 独立完善。最终源码 ZIP 仍须在干净解压目录重跑同一组门禁。本轮后端收口已提交并推送至 `main`；未打 Tag、创建 PR 或部署。
+> 当前状态（2026-08-29）：后端纵向切片已实现；本地 163/163 Node 测试、`src/**` 四项覆盖率 100%、23/23 契约、694,100 例 fuzz、非默认端口 Playwright E2E 1/1、smoke、三连演示和 175 文件密钥扫描通过，依赖审计为 0 漏洞；前端仍由 ABloom 独立完善。最终源码 ZIP 仍须在干净解压目录重跑同一组门禁。本轮后端收口已提交并推送至 `main`；未打 Tag、创建 PR 或部署。
 
-当前量化基线：Node 测试 159/159；seeded fuzz 685,000 例。
+当前量化基线：Node 测试 163/163；seeded fuzz 694,100 例。
 
 `从一个行业问题，到一份能下钻、能质疑、能更新的研究成果。`
 
@@ -80,9 +80,12 @@ INSIGHTFORGE_LLM=1
 INSIGHTFORGE_LLM_API_KEY=...
 INSIGHTFORGE_LLM_BASE_URL=https://...
 INSIGHTFORGE_LLM_MODEL=...
+# 可选；默认分别为 8192 / 16384，合法范围 256–32768
+INSIGHTFORGE_LLM_PLAN_MAX_TOKENS=8192
+INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS=16384
 ```
 
-该路径只允许一个 HTTPS 兼容端点，不路由多模型、不自动 fallback。问题与经最小化的信源标题、证据摘录、定位类型、Datum/公式以“未受信任 JSON 数据”发送；完整 URL、publisher、本地路径、上传文件名/哈希、人工决定和成果字节不会发送。每个 run 的 `modelProvenance.dataDisclosure` 记录实际发送阶段、字段、截断上限和省略字段；低匹配任务若只调用了在线 PLAN，会明确写出“未发送 SYNTHESIZE”。来源中的指令没有优先级。明显注入指令回声、Schema 错误或未知 evidence ID 会使含问题的单条候选整体丢弃，绝不删除坏字段后部分放行；其他独立候选仍逐条校验，过滤后少于 3 条才阻断整个 SYNTHESIZE。缺配置、网络失败和重复候选导致有效候选不足同样 fail-closed。任何密钥只存在于运行环境，不得提交。
+该路径只允许一个 HTTPS Chat Completions 端点，不路由多模型、不自动 fallback；端点必须接受项目当前使用的 `max_tokens` 与 JSON Object 请求字段。推理模型的隐藏推理和可见 JSON 可能共享输出预算，因此默认 PLAN/SYNTHESIZE 预算为 `8192/16384`；低输出上限端点可通过上述环境变量或 `/api/settings/llm` 的同名 camelCase 字段覆盖，API 设置整体优先于环境变量。无效预算 fail-closed，实际使用值写入 `modelProvenance`。问题与经最小化的信源标题、证据摘录、定位类型、Datum/公式以“未受信任 JSON 数据”发送；完整 URL、publisher、本地路径、上传文件名/哈希、人工决定和成果字节不会发送。每个 run 的 `modelProvenance.dataDisclosure` 记录实际发送阶段、字段、截断上限和省略字段；低匹配任务若只调用了在线 PLAN，会明确写出“未发送 SYNTHESIZE”。来源中的指令没有优先级。明显注入指令回声、Schema 错误、超长字段或未知 evidence ID 会使含问题的单条候选整体丢弃，绝不删除坏字段后部分放行；其他独立候选仍逐条校验，过滤后少于 3 条才阻断整个 SYNTHESIZE。缺配置、网络失败和重复候选导致有效候选不足同样 fail-closed。任何密钥只存在于运行环境，不得提交。
 
 ## 一键演示会发生什么
 
@@ -108,7 +111,7 @@ INSIGHTFORGE_LLM_MODEL=...
 - `GET /api/runs/:id/boundary-questions`：完成后返回 3 个可追溯到 EvidenceGap 的边界问题；运行中返回 409。
 - `GET /api/runs/:id/artifact-versions[/N]`：列出或下钻不可变成果快照；每个人工动作和来源更新推进版本。
 - `GET /api/runs/:id/artifacts/:kind?version=N`：按版本下载 `REPORT_MD / REPORT_PDF / PPTX / EVIDENCE_JSON`。
-- `GET/POST /api/settings/llm`：单 HTTPS 模型端点配置；key、base URL 与 model 均只以掩码返回，设置以 `0600` 原子落盘并优先于环境变量。
+- `GET/POST /api/settings/llm`：单 HTTPS 模型端点配置；POST 接受 `baseUrl / model / apiKey` 及可选整数 `planMaxTokens / synthesisMaxTokens`（256–32768，默认 8192/16384）；key、base URL 与 model 只以掩码返回，非敏感预算原值返回，设置以 `0600` 原子落盘并整体优先于环境变量。
 - 所有写请求默认要求服务端随机 request key，并校验 `Origin` / `Sec-Fetch-Site`；首页会在不改前端源码的情况下通过 CSP nonce 引导脚本自动加上 `x-insightforge-request-key`。仅本地调试可显式设置 `INSIGHTFORGE_DISABLE_REQUEST_KEY=1` 关闭，禁止用于共享或不可信网络。
 - 服务端把 `Host` 固定为回环 IP 与实际监听端口；若配置 `HOST=localhost`，启动前先验证全部 DNS 答案都是回环地址并绑定其中一个字面 IP，拒绝未验证的 `localhost` Host 和 DNS rebinding 形式的非回环 Host。
 - 运行模式标签来自 `synthesisMode`：在线单端点模型不会再被标成“使用缓存快照”，同时会诚实保留“信源使用缓存快照”的来源边界；该状态同步进入 API、JSON 和 PPTX。

@@ -11,18 +11,18 @@
 
 ## 自动门禁
 
-2026-08-28 在当前工作树执行的最新门禁：
+2026-08-29 在当前工作树执行的最新门禁：
 
 ```text
-npm run verify                 PASS; 159/159; four coverage metrics 100%; build; 173-file secret scan; contract 23/23; fuzz 685,000
-npm run test:e2e               PASS; 1/1 Chromium; 5.9 s; downloaded five-page PPTX parsed
+npm run verify                 PASS; 163/163; four coverage metrics 100%; build; 175-file secret scan; contract 23/23; fuzz 694,100
+npm run test:e2e               PASS; 1/1 Chromium; 7.9 s; test body 3.7 s
 npm run demo:triple            PASS; 3/3; 88/20/16 ms
 npm run smoke                  PASS
 npm ls --all                   PASS
 npm audit --audit-level=low    PASS; 0 vulnerabilities
 ```
 
-加入本审计文档后已重跑完整 `npm run verify`；当前 173 个 tracked/untracked 且未忽略的文件在 aggregate gate 内通过密钥扫描。
+加入本审计文档后已重跑完整 `npm run verify`；当前 175 个 tracked/untracked 且未忽略的文件在 aggregate gate 内通过密钥扫描。
 
 收口前旧源码包曾在无 `.git`、无依赖、无构建和无运行状态的全新解包目录通过当时的 36/36 门禁；该记录只证明旧包，不证明当前工作树。当前实现按所有者要求尚未重新打包，最终源码包必须在前端冻结后生成并在两个全新解包目录重跑；SHA-256 和基线应保存在 ZIP 同目录的 `.manifest.json`，避免把包自身哈希写入包内形成循环。详细结果见 `docs/TEST-RESULTS.md`。
 
@@ -32,6 +32,7 @@ npm audit --audit-level=low    PASS; 0 vulnerabilities
 - 程序检查缓存文件、提示词摘要、精确研究问题、Schema、语义角色、工具白名单、证据/假设 ID 和 37.1%、47.6%、31.3%、3.04 等当前数值。
 - 无关问题不能消费缓存；确定性失配结果标记 `DETERMINISTIC`，不会伪装成 `AI_JUDGMENT`。
 - 可选在线 LLM 路径只允许一个显式 HTTPS 端点，任何配置、网络、Schema 或引用失败都 fail-closed，不自动切模型。
+- 推理模型 PLAN/SYNTHESIZE 默认输出预算为 8192/16384，可在 256–32768 内分阶段覆盖；无效配置在出站前失败，实际预算写入 `modelProvenance`。StepFun 3.7 Flash 的旧预算失败与新预算成功证据见 `docs/verification/ABLOOM-43-STEPFUN-LIVE-2026-08-29.md`。
 - 已保存的真实在线模型输出及程序校验记录位于 `docs/verification/online-llm-output.json` 与 `online-llm-validation.json`；它证明一次真实模型→校验器调用，不代表仓库携带 API 凭据。
 
 ## 信源联网证据

@@ -41,6 +41,8 @@
 - 含未知 evidence ID 的单条候选（该候选整体丢弃，不删除坏 ID 后部分放行；其他独立候选继续校验）；
 - 逐条过滤后少于 3 条有效候选。
 
+端点须兼容 Chat Completions 的 `max_tokens` 和 JSON Object。默认 `PLAN=8192`、`SYNTHESIZE=16384`，因为推理型端点可能让隐藏推理与可见 JSON 共用 completion 预算；`INSIGHTFORGE_LLM_PLAN_MAX_TOKENS` / `INSIGHTFORGE_LLM_SYNTHESIS_MAX_TOKENS` 或 API 设置中的 `planMaxTokens` / `synthesisMaxTokens` 可在 256–32768 范围内覆盖。API 设置整体优先于环境变量。两个实际阶段预算随 `modelProvenance` 持久化；只调用 PLAN 的诚实拒答不会虚构 SYNTHESIZE 预算。StepFun 真实 RED/GREEN 记录见 `verification/ABLOOM-43-STEPFUN-LIVE-2026-08-29.md`。
+
 认证缓存采用更严格的静态制品契约：任一缓存候选含未知 evidence/assumption ID 都使整份缓存无效。在线响应则按上面的候选级隔离规则处理，只有剩余有效候选不足三条才使整个 SYNTHESIZE 失败；两条路径不得混写。
 
 传输只允许同一请求的最多两次有界重试，不更换模型或端点。密钥不进入事件、错误、证据包或日志。
@@ -49,7 +51,7 @@
 
 在线传输执行最小化：PLAN 只发送研究问题和输入种类（上传文件名不会发送）；SYNTHESIZE 只发送截断后的问题、source ID/标题、evidence ID/类型/摘录/定位种类以及 Datum 的指标、数值、单位、期间和公式。完整 URL、publisher、本地路径、上传文件名与哈希、人工决定、成果字节和凭据明确省略。每个 run 的 `modelProvenance.dataDisclosure` 记录实际发送阶段、字段类别、字符上限与省略项。若在线 PLAN 已运行但证据匹配度低于阈值，SYNTHESIZE 不发送，`routingNotice` 和步骤摘要都会明确说明，而不是静默伪装成一次完整模型运行。
 
-在线 PLAN/SYNTHESIZE 的 system 消息明确规定：研究问题、输入名称、来源标题、证据摘录、数据与公式都是未受信任的数据，来源内的“忽略任务”“读取环境变量”等文字不具有指令优先级。user 内容以独立 JSON 数据信封发送，`<`/`>`/`&` 及伪造边界标记被转义；不会把摘录与操作要求拼成同一段自然语言。模型输出仍须经过工具 allowlist、Evidence ID 白名单、Schema 和明显注入指令回声过滤，命中即丢弃。该词法过滤不声称解决所有语义级提示词注入：其余看似合理但错误的候选仍保持 `AI_JUDGMENT / PENDING_REVIEW`，由 Audit 与人类裁决。
+在线 PLAN/SYNTHESIZE 的 system 消息明确规定：研究问题、输入名称、来源标题、证据摘录、数据与公式都是未受信任的数据，来源内的“忽略任务”“读取环境变量”等文字不具有指令优先级。user 内容以独立 JSON 数据信封发送，`<`/`>`/`&` 及伪造边界标记被转义；不会把摘录与操作要求拼成同一段自然语言。模型输出仍须经过工具 allowlist、Evidence ID 白名单、字段长度/数量上限、Schema 和明显注入指令回声过滤，命中即丢弃。候选正文最多 2,000 字符，假设/缺口各最多 10 项且单项最多 500 字符，Evidence ID 最多 20 个；PLAN objective/expectedOutput 各最多 500 字符。该词法过滤不声称解决所有语义级提示词注入：其余看似合理但错误的候选仍保持 `AI_JUDGMENT / PENDING_REVIEW`，由 Audit 与人类裁决。
 
 ## 问题泛化
 
