@@ -9,7 +9,10 @@ export async function readResponseBytesLimited(
   limitError: string,
 ) {
   const declared = Number(response.headers.get("content-length") ?? 0);
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error(limitError);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(limitError);
+  }
   if (!response.body) return new Uint8Array();
 
   const reader = response.body.getReader();

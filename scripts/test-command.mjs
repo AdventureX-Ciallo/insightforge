@@ -10,12 +10,13 @@ let childArguments;
 
 if (mode === "tests") {
   const testDirectory = join(root, "tests");
+  const fetchIsolation = join(testDirectory, "install-fetch-isolation.ts");
   const testFiles = (await readdir(testDirectory))
     .filter((name) => name.endsWith(".test.ts"))
     .sort()
     .map((name) => join(testDirectory, name));
   if (testFiles.length === 0) throw new Error("No test files were discovered");
-  childArguments = ["--import", "tsx", "--test", "--test-concurrency=1", ...forwarded, ...testFiles];
+  childArguments = ["--import", "tsx", "--import", fetchIsolation, "--test", "--test-concurrency=1", ...forwarded, ...testFiles];
 } else if (mode === "fuzz") {
   childArguments = ["--import", "tsx", join(root, "tests", "fuzz", "run-fuzz.ts"), ...forwarded];
 } else {

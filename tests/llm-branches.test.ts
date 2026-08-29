@@ -144,11 +144,14 @@ test("LLM transport does not retry 4xx and retries 429, 5xx, network, and non-Er
   await assert.rejects(withFetch(async () => { throw "reset"; }, () => draftPlanSteps(config, planContext, 100, 0)), /non-Error rejection/u);
 
   let exactEndpoint = "";
-  await withFetch(async (input) => {
+  let redirectMode: RequestRedirect | undefined;
+  await withFetch(async (input, init) => {
     exactEndpoint = String(input);
+    redirectMode = init?.redirect;
     return jsonResponse({ choices: [{ message: { content: JSON.stringify({ steps: [] }) } }] });
   }, () => draftPlanSteps({ ...config, baseUrl: "https://model.example.test/v1/chat/completions" }, planContext, 100, 0));
   assert.equal(exactEndpoint, "https://model.example.test/v1/chat/completions");
+  assert.equal(redirectMode, "error", "LLM prompts must never be forwarded through HTTP redirects");
 });
 
 test("LLM transport and timeout failures are categorized without leaking request secrets", async () => {
@@ -173,6 +176,54 @@ test("LLM transport and timeout failures are categorized without leaking request
     assert.doesNotMatch(String(error), new RegExp(`${config.apiKey}|${config.baseUrl}|${config.model}`, "u"));
     return true;
   });
+  assert.equal(calls, 2);
+});
+
+test("LLM cancellation stops before transfer, during fetch, and during bounded retry delay", async () => {
+  let calls = 0;
+  const preAborted = new AbortController();
+  preAborted.abort(new Error("cancelled before transfer"));
+  await assert.rejects(
+    withFetch(async () => {
+      calls += 1;
+      return jsonResponse({});
+    }, () => draftPlanSteps(config, planContext, 100, 10, preAborted.signal)),
+    /cancelled before transfer/u,
+  );
+  assert.equal(calls, 0);
+
+  const duringFetch = new AbortController();
+  await assert.rejects(
+    withFetch((_input, init) => new Promise((_resolve, reject) => {
+      calls += 1;
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      queueMicrotask(() => duringFetch.abort(new Error("cancelled during fetch")));
+    }), () => draftPlanSteps(config, planContext, 100, 10, duringFetch.signal)),
+    /cancelled during fetch/u,
+  );
+  assert.equal(calls, 1);
+
+  const duringRetry = new AbortController();
+  calls = 0;
+  await assert.rejects(
+    withFetch(async () => {
+      calls += 1;
+      setTimeout(() => duringRetry.abort(new Error("cancelled during retry delay")), 0);
+      return jsonResponse({}, 500);
+    }, () => draftPlanSteps(config, planContext, 100, 100, duringRetry.signal)),
+    /cancelled during retry delay/u,
+  );
+  assert.equal(calls, 1);
+
+  const activeSignal = new AbortController();
+  calls = 0;
+  const steps = await withFetch(async () => {
+    calls += 1;
+    return calls === 1
+      ? jsonResponse({}, 500)
+      : jsonResponse({ choices: [{ message: { content: JSON.stringify({ steps: [] }) } }] });
+  }, () => draftPlanSteps(config, planContext, 100, 0, activeSignal.signal));
+  assert.deepEqual(steps, []);
   assert.equal(calls, 2);
 });
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import {
   MAX_REJECTED_DRAFT_EVIDENCE_ID_LENGTH,
   MAX_REJECTED_DRAFT_EVIDENCE_IDS,
   MAX_REJECTED_DRAFT_TEXT_LENGTH,
+  rejectedDraftSchema,
   researchRunSchema,
 } from "../src/domain.js";
 import { runGoldenCase } from "../src/index.js";
@@ -19,6 +20,20 @@ import { triageLlmDrafts, type LlmDraft } from "../src/llm.js";
 import { createInsightForgeServer } from "../src/server.js";
 
 const GOLDEN_QUESTION = "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？";
+
+test("Unicode rejection previews remain valid under the persisted code-point limits", () => {
+  const triage = triageLlmDrafts([{
+    text: "😀".repeat(2_001),
+    evidenceIds: ["evidence-market-csv"],
+    assumptions: [],
+    missingEvidence: [],
+  }], ["evidence-market-csv"], "2026-08-29T00:00:00.000Z");
+  const rejected = triage.rejected[0]!;
+  assert.equal([...rejected.text].length, MAX_REJECTED_DRAFT_TEXT_LENGTH);
+  assert.equal(rejected.textTruncated, true);
+  assert.doesNotThrow(() => rejectedDraftSchema.parse(rejected));
+  assert.equal(rejectedDraftSchema.safeParse({ ...rejected, text: "😀".repeat(MAX_REJECTED_DRAFT_TEXT_LENGTH + 1) }).success, false);
+});
 
 test("a successful live run persists rejected draft decisions in its immutable synthesis trace and evidence package", async () => {
   const originalFetch = globalThis.fetch;
@@ -317,4 +332,24 @@ test("persistRun tolerates a missing artifact directory but fails closed on an i
   await mkdir(runDir, { recursive: true });
   await writeFile(join(runDir, "artifacts"), "not a directory", "utf8");
   await assert.rejects(persistRun(run, invalidArtifactsWorkspace, false), /ENOTDIR|not a directory/iu);
+});
+
+test("artifact garbage-collection failure cannot turn an already-published run into a failed mutation", async () => {
+  const sourceWorkspace = await mkdtemp(join(tmpdir(), "insightforge-persist-gc-source-"));
+  const run = await runGoldenCase({
+    researchQuestion: GOLDEN_QUESTION,
+    fixtureDir: resolve("fixtures/golden"),
+    workspaceDir: sourceWorkspace,
+    llmMode: "cached",
+  });
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-persist-gc-failure-"));
+  const artifactsDir = join(workspaceDir, run.id, "artifacts");
+  await mkdir(join(artifactsDir, "v999"), { recursive: true });
+  await chmod(artifactsDir, 0o500);
+  try {
+    await assert.doesNotReject(persistRun(run, workspaceDir, false));
+  } finally {
+    await chmod(artifactsDir, 0o700);
+  }
+  assert.equal(JSON.parse(await readFile(join(workspaceDir, run.id, "run.json"), "utf8")).id, run.id);
 });

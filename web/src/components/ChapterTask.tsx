@@ -117,6 +117,9 @@ export default function ChapterTask() {
           {backend === 'offline' && (
             <span className="text-xs text-insufficient" role="alert">后端未连接 · 请先启动后端服务</span>
           )}
+          {terminal === 'FAILED' && state.updateError && (
+            <span className="text-xs text-insufficient" role="alert">{state.updateError}</span>
+          )}
         </motion.div>
 
         <div aria-live="polite" className="sr-only">

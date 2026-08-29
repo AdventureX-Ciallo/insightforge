@@ -76,6 +76,7 @@ export async function runSourceUpdateFuzz(rng: SeededPrng, cases: number) {
 
     for (let index = 0; index < cases; index += 1) {
       const { run: initial, ids } = dynamicRun(baseline, rng, index);
+      const caseWorkspaceDir = join(workspaceDir, `case-${index}`);
       let run = initial;
       const scenario = index % 14;
       if (scenario === 1) run.researchQuestion = `非黄金问题-${rng.token(100)}`;
@@ -120,7 +121,7 @@ export async function runSourceUpdateFuzz(rng: SeededPrng, cases: number) {
       if ((scenario >= 1 && scenario <= 7) || scenario >= 10) {
         let observed: unknown;
         try {
-          await applySourceUpdate(run, { fixtureDir: resolve("fixtures/golden"), workspaceDir });
+          await applySourceUpdate(run, { fixtureDir: resolve("fixtures/golden"), workspaceDir: caseWorkspaceDir });
         } catch (error) {
           observed = error;
         }
@@ -132,7 +133,7 @@ export async function runSourceUpdateFuzz(rng: SeededPrng, cases: number) {
       const oldVersion = run.sourceVersions.find((item) => item.id === ids.sourceVersion)!;
       const unaffected = run.conclusions.find((item) => !item.sourceIds.includes(ids.targetSource))!;
       const unaffectedBefore = structuredClone(unaffected);
-      const updated = await applySourceUpdate(run, { fixtureDir: resolve("fixtures/golden"), workspaceDir });
+      const updated = await applySourceUpdate(run, { fixtureDir: resolve("fixtures/golden"), workspaceDir: caseWorkspaceDir });
       const v2 = updated.sourceVersions.find((item) => item.sourceId === ids.targetSource && item.version === "v2");
       invariant(v2, `case=${index}: dynamic target source did not receive v2`);
       invariant(JSON.stringify(v2.upstreamSourceIds) === JSON.stringify(oldVersion.upstreamSourceIds), `case=${index}: upstream provenance changed to fixture IDs`);
@@ -153,7 +154,7 @@ export async function runSourceUpdateFuzz(rng: SeededPrng, cases: number) {
       if (scenario === 8) {
         let observed: unknown;
         try {
-          await applySourceUpdate(updated, { fixtureDir: resolve("fixtures/golden"), workspaceDir });
+          await applySourceUpdate(updated, { fixtureDir: resolve("fixtures/golden"), workspaceDir: caseWorkspaceDir });
         } catch (error) {
           observed = error;
         }

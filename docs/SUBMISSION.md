@@ -38,13 +38,13 @@
 
 | 项目 | 当前证据 |
 |---|---|
-| Node 测试 | 188/188 PASS |
+| Node 测试 | 197 个顶层测试、203/203 断言 PASS |
 | 覆盖率 | `src/**` 语句、分支、函数、行四项均 100% |
-| Seeded fuzz | 737,500 例；7,365 行生产 TypeScript；100.14 例/行 |
-| 浏览器 E2E | 1/1 PASS；非默认端口真实 Chromium 完整 React 路径与下载 PPTX 解析通过，最新测试体 14.5 s、命令总耗时 23.1 s |
-| 稳定演示 | 黄金案例连续三次成功（88/20/16 ms） |
-| 联调合同 | 24/24 PASS；`npm run contract:check` 覆盖 CSRF 能力、request key、SSE、presets、run、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、搜索合同及四格式下载 |
-| 安全 | loopback、上传字节/路径/SHA、工具白名单、提示词注入、SSRF 预检和密钥扫描均有门禁 |
+| Seeded fuzz | seed `520628262`，770,000 例；7,690 行生产 TypeScript；100.13 例/行 |
+| 浏览器 E2E | 6/6 PASS；真实 Chromium 覆盖完整研究闭环、选定搜索引擎、模型状态脱敏、上传完整性、刷新恢复和设置失败语义；命令总耗时 52.9 s |
+| 稳定演示 | 黄金案例连续三次成功，三次均在 2 s 内完成 |
+| 联调合同 | 25/25 PASS；`npm run contract:check` 覆盖 CSRF 能力、request key、SSE、presets、run/current/cancel、boundary questions、人工决定、来源更新、artifact versions、settings、uploads、选定搜索引擎及四格式下载 |
+| 安全 | loopback、上传字节/路径/SHA、工具白名单、提示词注入、SSRF 预检和密钥扫描（清理后源码树 222 个文件）均有门禁；`npm audit --audit-level=high` 为 0 vulnerabilities |
 
 ## 核心创新
 
@@ -60,7 +60,7 @@
 |---|---|---|
 | 前端衔接 | ABloom React 工作台已并入统一安装、类型检查、构建与 E2E | “前后端主路径已联调；最终源码包仍待干净验收。” |
 | SSE | React 默认消费，错误时回退轮询 | “页面使用 SSE 展示运行事件，并保留轮询降级路径。” |
-| 真实搜索环境 | 当前机器的 Bing、Google、百度 DNS 返回 `198.18.0.0/15` fake-IP 代理保留段，产品在 fetch 前 fail-closed | “离线黄金案例稳定；当前代理环境未验证实时搜索成功。” |
+| 真实搜索环境 | 2026-08-29 三引擎均经真实 DoH 与 HTTP 查询；Google 解析出 1 条候选，Bing/百度响应可达但当前解析器得到 0 条 | “离线黄金案例稳定；实时查询链已实测，但 Bing/百度本轮没有产生可用候选，不能称三引擎均有效。” |
 | 在线 LLM | 当前环境没有 API Key/Base URL/Model，未发起线上调用 | “黄金案例使用认证模型缓存；在线单端点成功仍待有 Key 环境验证。” |
 | 黄金资料 | 明确标记的合成离线演示资料 | “验证产品机制，不代表真实市场研究结论。” |
 | PPTX | OOXML 解析与 macOS PowerPoint 打开/编辑/保存已验 | “Windows Microsoft PowerPoint 专项仍未验证。” |

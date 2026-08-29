@@ -8,10 +8,11 @@ import { revalidateConclusionAndPersist, restoredClaimStatus } from "../src/conc
 import { computeResearchSnapshotId, type Claim, type ResearchRun } from "../src/domain.js";
 import { DomainError } from "../src/domain-error.js";
 import { createInsightForgeServer } from "../src/server.js";
+import { fetchForPoll } from "./http-poll.js";
 
 async function waitForRun(baseUrl: string, runId: string) {
   for (let attempt = 0; attempt < 500; attempt += 1) {
-    const body = await fetch(`${baseUrl}/api/runs/${runId}`).then((response) => response.json()) as { run?: { id: string } };
+    const body = await fetchForPoll(`${baseUrl}/api/runs/${runId}`).then((response) => response.json()) as { run?: { id: string } };
     if (body.run) return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 10));
   }

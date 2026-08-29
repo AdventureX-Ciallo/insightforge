@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,6 +25,9 @@ test("settings validation rejects absent, malformed, credentialed, or unsafe end
   await rejectsInput({ ...valid, baseUrl: "http://models.example.test/v1" }, /must use HTTPS/u);
   await rejectsInput({ ...valid, baseUrl: "https://user@models.example.test/v1" }, /embedded credentials/u);
   await rejectsInput({ ...valid, baseUrl: "https://:password@models.example.test/v1" }, /embedded credentials/u);
+  await rejectsInput({ ...valid, baseUrl: "https://127.0.0.1/v1" }, /must use HTTPS/u);
+  await rejectsInput({ ...valid, baseUrl: "https://[::1]/v1" }, /must use HTTPS/u);
+  await rejectsInput({ ...valid, baseUrl: "https://model.local/v1" }, /must use HTTPS/u);
 });
 
 test("API settings persist validated optional PLAN and SYNTHESIZE token budgets", async () => {
@@ -76,6 +79,13 @@ test("settings load fails closed for unreadable, malformed, and semantically inv
   await assert.rejects(loadApiLlmSettings(invalidStored), /Stored LLM settings are invalid/u);
 
   await chmod(malformed, 0o700);
+});
+
+test("failed settings replacement removes the secret-bearing temporary file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "insightforge-settings-rename-failure-"));
+  await mkdir(join(directory, "settings.json"));
+  await assert.rejects(saveApiLlmSettings(directory, valid), /EISDIR|directory/iu);
+  assert.deepEqual((await readdir(directory)).filter((name) => name.startsWith(".settings-")), []);
 });
 
 test("public settings expose only masks and preserve API over environment priority", () => {

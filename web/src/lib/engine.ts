@@ -153,12 +153,65 @@ export async function detectBackend() {
 
 async function restoreFromBackend(presets: Preset[]) {
   try {
-    const { run } = await api.current()
+    const { run, job } = await api.current()
+    if (job?.status === 'running' && job.researchQuestion && !dismissed.has(job.runId)) {
+      const token = ++runToken
+      const isGolden = isGoldenQuestion(presets, job.researchQuestion)
+      const steps = initialSteps()
+      for (const step of job.steps) steps[step.state] = step.status
+      setState({
+        ...freshState(job.researchQuestion, isGolden),
+        backend: 'online',
+        presets,
+        runId: job.runId,
+        phase: 'running',
+        steps,
+        startedAt: job.createdAt,
+      })
+      followRun(job.runId, token, isGolden)
+      return
+    }
+    if (job?.status === 'failed' && job.researchQuestion && (!run || job.runId !== run.id) && !dismissed.has(job.runId)) {
+      const steps = initialSteps()
+      for (const step of job.steps) steps[step.state] = step.status
+      setState({
+        ...freshState(job.researchQuestion, isGoldenQuestion(presets, job.researchQuestion)),
+        backend: 'online',
+        presets,
+        runId: job.runId,
+        phase: 'done',
+        steps,
+        terminal: 'FAILED',
+        updateError: job.error ?? '上次运行未完成',
+        startedAt: job.createdAt,
+      })
+      return
+    }
     if (!run || dismissed.has(run.id)) return
     applyRun(run, isGoldenQuestion(presets, run.researchQuestion))
   } catch {
     /* 404 = 没有运行记录 */
   }
+}
+
+function followRun(runId: string, token: number, isGolden: boolean) {
+  closeSse = subscribeRunEvents(runId, {
+    onStep: (backendSteps) => {
+      const steps = initialSteps()
+      for (const step of backendSteps) steps[step.state] = step.status
+      setState({ steps })
+    },
+    onTool: (event) => {
+      setState({ feed: [...state.feed, toolEventToFeed(event)] })
+    },
+    onTerminal: (status) => {
+      if (status === 'completed') void finishFromApi(runId, token, isGolden)
+      else setState({ phase: 'done', terminal: 'FAILED', updateError: '研究运行失败，请查看步骤状态后重试' })
+    },
+    onError: () => {
+      void pollRun(runId, token, isGolden)
+    },
+  })
 }
 
 const isGoldenQuestion = (presets: Preset[], question: string) =>
@@ -204,15 +257,19 @@ function applyRun(run: Parameters<typeof adaptRun>[0], isGolden: boolean) {
 
 /* ─── 选题与启动 ───────────────────────────────────────────────── */
 export function selectPreset(preset: Preset) {
+  const abandonedRunId = state.phase === 'running' ? state.runId : null
   runToken++
   closeSse?.()
+  if (abandonedRunId) void api.cancelRun(abandonedRunId).catch(() => undefined)
   setState({ ...freshState(preset.question, preset.kind === 'golden'), backend: state.backend, presets: state.presets, uploadedIds: state.uploadedIds })
 }
 
 export async function startRun() {
   if (state.backend !== 'online') return
+  const abandonedRunId = state.phase === 'running' ? state.runId : null
   const token = ++runToken
   closeSse?.()
+  if (abandonedRunId) void api.cancelRun(abandonedRunId).catch(() => undefined)
   const { question } = state.view
   const { isGolden, presets } = state
   const uploadIds = state.uploadedIds
@@ -221,23 +278,7 @@ export async function startRun() {
     const { runId } = await api.createRun(question, uploadIds)
     if (token !== runToken) return
     setState({ runId, uploadedIds: [] })
-    closeSse = subscribeRunEvents(runId, {
-      onStep: (backendSteps) => {
-        const steps = initialSteps()
-        for (const s of backendSteps) steps[s.state] = s.status
-        setState({ steps })
-      },
-      onTool: (event) => {
-        setState({ feed: [...state.feed, toolEventToFeed(event)] })
-      },
-      onTerminal: (status) => {
-        if (status === 'completed') void finishFromApi(runId, token, isGolden)
-        else setState({ phase: 'done', terminal: 'FAILED' })
-      },
-      onError: () => {
-        void pollRun(runId, token, isGolden)
-      },
-    })
+    followRun(runId, token, isGolden)
   } catch (e) {
     setState({ phase: 'done', terminal: 'FAILED', updateError: e instanceof Error ? e.message : '创建运行失败' })
   }
@@ -264,6 +305,7 @@ async function pollRun(runId: string, token: number, isGolden: boolean) {
     }
     await new Promise((r) => setTimeout(r, 1500))
   }
+  if (token === runToken) setState({ phase: 'done', terminal: 'FAILED', updateError: '无法确认任务最终状态，请检查后端连接后重试' })
 }
 
 async function finishFromApi(runId: string, token: number, isGolden: boolean) {
@@ -317,7 +359,13 @@ export async function applySourceUpdate() {
 
 /* ─── 上传入链 ─────────────────────────────────────────────────── */
 export function registerUpload(id: string) {
+  if (state.uploadedIds.includes(id)) return
+  if (state.uploadedIds.length >= 5) throw new Error('每次研究最多选择 5 个上传资料')
   setState({ uploadedIds: [...state.uploadedIds, id] })
+}
+
+export function removeUpload(id: string) {
+  setState({ uploadedIds: state.uploadedIds.filter((candidate) => candidate !== id) })
 }
 
 /** 基于当前来源复核 STALE 结论（后端 #47 端点） */
@@ -328,8 +376,10 @@ export async function revalidateConclusion(id: string) {
 }
 
 export function resetAll() {
+  const abandonedRunId = state.phase === 'running' ? state.runId : null
   runToken++
   closeSse?.()
+  if (abandonedRunId) void api.cancelRun(abandonedRunId).catch(() => undefined)
   if (state.runId) dismissed.add(state.runId)
   setState({ ...freshState(), backend: state.backend, presets: state.presets })
 }

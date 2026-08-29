@@ -16,6 +16,11 @@ let requestKey = null;
 let upload = null;
 let runId = null;
 let run = null;
+const runIdempotencyKey = `contract-run-${randomUUID()}`;
+const runRequestBody = {
+  researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+  uploadIds: [],
+};
 
 function compact(value) {
   if (value === undefined) return null;
@@ -183,26 +188,41 @@ try {
   });
 
   await check("source-search", "POST", "/api/sources/search", async () => {
-    const body = await jsonRequest("/api/sources/search", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ engine: "bing", query: "新能源汽车 充电基础设施" }),
-    });
-    requireContract(body.engine === "bing" && body.candidates?.length === 1 && body.candidates[0].materialRole === "CANDIDATE_SOURCE" && body.candidates[0].authorityVerified === false, "search candidate contract mismatch", body);
-    requireContract(body.sourceLimitTrace?.maxSources === 10, "search response omitted MAX_SOURCES trace", body);
-    requireContract(body.dnsResolution?.resolver === "injected" && body.dnsResolution?.addressCount === 1 && body.dnsResolution?.attempts?.length === 1, "search response omitted DNS resolution trace", body);
-    return { mode: "deterministic-contract-provider-not-live-search", engine: body.engine, candidate: body.candidates[0], sourceLimitTrace: body.sourceLimitTrace, dnsResolution: body.dnsResolution };
+    const results = [];
+    for (const engine of ["bing", "google", "baidu"]) {
+      const body = await jsonRequest("/api/sources/search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ engine, query: "新能源汽车 充电基础设施" }),
+      });
+      requireContract(body.engine === engine && body.candidates?.length === 1 && body.candidates[0].materialRole === "CANDIDATE_SOURCE" && body.candidates[0].authorityVerified === false, "search candidate contract mismatch", body);
+      requireContract(body.sourceLimitTrace?.maxSources === 10, "search response omitted MAX_SOURCES trace", body);
+      requireContract(body.dnsResolution?.resolver === "injected" && body.dnsResolution?.addressCount === 1 && body.dnsResolution?.attempts?.length === 1, "search response omitted DNS resolution trace", body);
+      results.push({ engine: body.engine, candidate: body.candidates[0], sourceLimitTrace: body.sourceLimitTrace, dnsResolution: body.dnsResolution });
+    }
+    return { mode: "deterministic-contract-provider-not-live-search", results };
   });
 
   await check("run-create", "POST", "/api/runs", async () => {
     requireContract(upload?.id, "upload-create dependency unavailable", { upload });
+    runRequestBody.uploadIds = [upload.id];
     const body = await jsonRequest("/api/runs", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？", uploadIds: [upload.id] }),
+      headers: { "content-type": "application/json", "x-insightforge-idempotency-key": runIdempotencyKey },
+      body: JSON.stringify(runRequestBody),
     }, 202);
     runId = body.runId;
     requireContract(typeof runId === "string" && body.statusUrl === `/api/runs/${runId}`, "run creation contract mismatch", body);
+    return body;
+  });
+
+  await check("run-create-idempotent-replay", "POST", "/api/runs", async () => {
+    const body = await jsonRequest("/api/runs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-insightforge-idempotency-key": runIdempotencyKey },
+      body: JSON.stringify(runRequestBody),
+    }, 202);
+    requireContract(body.runId === runId && body.statusUrl === `/api/runs/${runId}`, "idempotent replay created a second run", { expectedRunId: runId, body });
     return body;
   });
 
@@ -229,8 +249,9 @@ try {
   await check("current-run", "GET", "/api/current", async () => {
     const body = await jsonRequest("/api/current");
     requireContract(body.run?.id === runId, "current run does not match created run", { expectedRunId: runId, actualRunId: body.run?.id });
+    requireContract(body.job?.runId === runId && body.job?.status === "completed" && body.job?.researchQuestion === runRequestBody.researchQuestion, "current job does not support stateless frontend restore", body.job);
     requireContract(Array.isArray(body.run.rejectedDrafts) && Number.isSafeInteger(body.run.rejectedDraftOverflowCount), "current run omitted rejected-draft triage", body.run);
-    return { runId: body.run.id, terminalStatus: body.run.terminalStatus, rejectedDraftCount: body.run.rejectedDrafts.length };
+    return { runId: body.run.id, jobStatus: body.job.status, terminalStatus: body.run.terminalStatus, rejectedDraftCount: body.run.rejectedDrafts.length };
   });
 
   await check("boundary-questions", "GET", "/api/runs/:id/boundary-questions", async () => {

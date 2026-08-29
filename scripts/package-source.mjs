@@ -32,6 +32,7 @@ const excludedDirectories = new Set([
 const excludedPaths = new Set([
   "demo-assets",
   "docs/assets",
+  "public",
 ]);
 const forbiddenNames = new Set([
   ".env",

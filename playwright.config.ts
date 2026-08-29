@@ -20,6 +20,6 @@ export default defineConfig({
     command: "npm run build && node scripts/start-e2e.mjs",
     url: `${e2eBaseUrl}/api/health`,
     reuseExistingServer: false,
-    timeout: 20_000,
+    timeout: 60_000,
   },
 });

@@ -164,7 +164,7 @@ export interface ArtifactVersion {
   reportNo: string
   version: number
   createdAt: string
-  trigger: 'INITIAL_DELIVER' | 'HUMAN_DECISION' | 'HUMAN_EDIT' | 'SOURCE_UPDATE'
+  trigger: 'INITIAL_DELIVER' | 'HUMAN_DECISION' | 'HUMAN_EDIT' | 'SOURCE_UPDATE' | 'REVALIDATION'
   summary: string
   status: 'CURRENT' | 'SUPERSEDED'
   artifacts: ArtifactFile[]

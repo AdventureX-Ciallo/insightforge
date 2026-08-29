@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { searchLiveSingleProvider } from "../src/tools/live-source-search.js";
+import { readResponseBytesLimited } from "../src/tools/limited-response.js";
 import { isBlockedIpAddress, parseSearchCandidates, searchSelectedEngine, validatePublicHttpUrl } from "../src/tools/search-engines.js";
 
 const publicResolver = async () => [{ address: "93.184.216.34", family: 4 }];
@@ -119,4 +120,21 @@ test("search readers cancel chunked responses immediately when the byte limit is
   );
   assert.equal(live.state.cancelled, true);
   assert.equal(live.state.pulls, 3, "the 512 KiB reader must stop on the first over-limit chunk");
+});
+
+test("limited response reader cancels a declared oversized body before reading it", async () => {
+  const state = { pulls: 0, cancelled: false };
+  const body = new ReadableStream<Uint8Array>({
+    pull() {
+      state.pulls += 1;
+    },
+    cancel() {
+      state.cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  const response = new Response(body, { headers: { "content-length": "11" } });
+
+  await assert.rejects(readResponseBytesLimited(response, 10, "too large"), /too large/u);
+  assert.equal(state.cancelled, true);
+  assert.equal(state.pulls, 0);
 });

@@ -7,12 +7,13 @@ import JSZip from "jszip";
 
 import { createInsightForgeServer } from "../src/server.js";
 import { MAX_RETAINED_UPLOADS, persistUpload } from "../src/upload-store.js";
+import { fetchForPoll } from "./http-poll.js";
 
 async function waitForRun(baseUrl: string, runId: string) {
   const deadline = Date.now() + 60_000;
   const observed = new Set<string>();
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     assert.equal(response.status, 200);
     const body = await response.json() as {
       job: { status: string; steps: Array<{ state: string; status: string }> };
@@ -254,14 +255,18 @@ test("server restores valid state, repairs truncated current state, and rejects 
   };
   const writer = createInsightForgeServer(options);
   const writerUrl = await writer.start(0, "127.0.0.1");
-  const create = await fetch(`${writerUrl}/api/runs`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？" }),
-  });
-  const { runId } = await create.json() as { runId: string };
-  await waitForRun(writerUrl, runId);
-  await writer.stop();
+  let runId = "";
+  try {
+    const create = await fetch(`${writerUrl}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ researchQuestion: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？" }),
+    });
+    ({ runId } = await create.json() as { runId: string });
+    await waitForRun(writerUrl, runId);
+  } finally {
+    await writer.stop();
+  }
   const legacyRun = JSON.parse(await readFile(join(workspaceDir, "current.json"), "utf8")) as { evictedArtifactVersionCount?: number };
   delete legacyRun.evictedArtifactVersionCount;
   await writeFile(join(workspaceDir, "current.json"), JSON.stringify(legacyRun), "utf8");

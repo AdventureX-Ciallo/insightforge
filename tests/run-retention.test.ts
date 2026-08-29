@@ -8,23 +8,123 @@ import { workflowStates } from "../src/domain.js";
 import { runGoldenCase } from "../src/engine.js";
 import { MAX_CONCURRENT_RUNS, MAX_RETAINED_RUNS, pruneRunWorkspace } from "../src/run-retention.js";
 import { createInsightForgeServer } from "../src/server.js";
+import { fetchForPoll } from "./http-poll.js";
 
 const question = "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？";
 
-async function createRun(baseUrl: string, uploadIds?: string[]) {
+async function createRun(baseUrl: string, uploadIds?: string[], idempotencyKey?: string, researchQuestion = question) {
   const response = await fetch(`${baseUrl}/api/runs`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ researchQuestion: question, ...(uploadIds ? { uploadIds } : {}) }),
+    headers: {
+      "content-type": "application/json",
+      ...(idempotencyKey ? { "x-insightforge-idempotency-key": idempotencyKey } : {}),
+    },
+    body: JSON.stringify({ researchQuestion, ...(uploadIds ? { uploadIds } : {}) }),
   });
   const body = await response.json() as { runId?: string; error?: string; code?: string };
   return { response, body };
 }
 
+test("run creation is idempotent for one frontend action without conflating different requests", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-run-idempotency-"));
+  const app = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 20 });
+  const baseUrl = await app.start(0, "127.0.0.1");
+  const key = "frontend-action-00000001";
+  try {
+    const [first, replay] = await Promise.all([
+      createRun(baseUrl, undefined, key),
+      createRun(baseUrl, undefined, key),
+    ]);
+    assert.equal(first.response.status, 202);
+    assert.equal(replay.response.status, 202);
+    assert.equal(first.body.runId, replay.body.runId);
+    assert.equal(app.jobCount(), 1, "a network retry must not allocate a second backend job");
+
+    const conflict = await createRun(
+      baseUrl,
+      undefined,
+      key,
+      "请评估制造企业生成式 AI 采购决策中的证据缺口与适用边界？",
+    );
+    assert.equal(conflict.response.status, 409);
+    assert.equal(conflict.body.code, "IDEMPOTENCY_KEY_REUSED");
+
+    const malformed = await createRun(baseUrl, undefined, "short");
+    assert.equal(malformed.response.status, 400);
+    assert.equal(malformed.body.code, "INVALID_IDEMPOTENCY_KEY");
+
+    await waitForTerminal(baseUrl, first.body.runId!);
+  } finally {
+    await app.stop();
+  }
+
+  const restarted = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 0 });
+  const restartedUrl = await restarted.start(0, "127.0.0.1");
+  try {
+    const replay = await createRun(restartedUrl, undefined, key);
+    assert.equal(replay.response.status, 202);
+    assert.equal(restarted.jobCount(), 1);
+  } finally {
+    await restarted.stop();
+  }
+});
+
+test("cancelling an abandoned run releases backend capacity and is idempotent", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-run-cancel-"));
+  const app = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 100 });
+  const baseUrl = await app.start(0, "127.0.0.1");
+  try {
+    const [first, second] = await Promise.all([createRun(baseUrl), createRun(baseUrl)]);
+    assert.equal(first.response.status, 202);
+    assert.equal(second.response.status, 202);
+    assert.equal(app.activeRunCount(), MAX_CONCURRENT_RUNS);
+
+    const retryKey = "frontend-capacity-retry-0001";
+    const capacityRejected = await createRun(baseUrl, undefined, retryKey);
+    assert.equal(capacityRejected.response.status, 429);
+
+    const cancelled = await fetch(`${baseUrl}/api/runs/${first.body.runId}/cancel`, { method: "POST" });
+    assert.equal(cancelled.status, 200);
+    assert.equal(((await cancelled.json()) as { job: { status: string } }).job.status, "failed");
+    assert.equal(app.activeRunCount(), 1);
+
+    const admittedRetry = await createRun(baseUrl, undefined, retryKey);
+    assert.equal(admittedRetry.response.status, 202, "a transient 429 must not poison the idempotency key");
+
+    const replay = await fetch(`${baseUrl}/api/runs/${first.body.runId}/cancel`, { method: "POST" });
+    assert.equal(replay.status, 200);
+    assert.equal(((await replay.json()) as { job: { status: string } }).job.status, "failed");
+
+    assert.equal(app.activeRunCount(), MAX_CONCURRENT_RUNS, "the retried action occupies the released run slot");
+  } finally {
+    await app.stop();
+  }
+});
+
+test("current endpoint exposes the latest active job so a stateless frontend can resume after refresh", async () => {
+  const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-current-active-"));
+  const app = createInsightForgeServer({ fixtureDir: resolve("fixtures/golden"), publicDir: resolve("public"), workspaceDir, stepDelayMs: 100 });
+  const baseUrl = await app.start(0, "127.0.0.1");
+  try {
+    const created = await createRun(baseUrl);
+    assert.equal(created.response.status, 202);
+    const current = await (await fetch(`${baseUrl}/api/current`)).json() as {
+      run: null;
+      job: { runId: string; researchQuestion: string; status: string } | null;
+    };
+    assert.equal(current.run, null);
+    assert.equal(current.job?.runId, created.body.runId);
+    assert.equal(current.job?.researchQuestion, question);
+    assert.equal(current.job?.status, "running");
+  } finally {
+    await app.stop();
+  }
+});
+
 async function waitForTerminal(baseUrl: string, runId: string) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+    const response = await fetchForPoll(`${baseUrl}/api/runs/${runId}`);
     const body = await response.json() as { job: { status: string } };
     if (body.job.status !== "running") return body.job.status;
     await new Promise((resolveWait) => setTimeout(resolveWait, 10));
@@ -115,6 +215,15 @@ test("server restart converts a persisted in-flight job into an explicit failed 
   await writeFile(join(workspaceDir, `${completedWithoutRunId}-progress.json`), `${JSON.stringify({ runId: completedWithoutRunId, status: "completed", steps, error: null, events: [] })}\n`, "utf8");
   const malformedId = "run-00000000-0000-4000-8000-000000000101";
   await writeFile(join(workspaceDir, `${malformedId}-progress.json`), "{bad json\n", "utf8");
+  const incompleteIdempotencyId = "run-00000000-0000-4000-8000-000000000105";
+  await writeFile(join(workspaceDir, `${incompleteIdempotencyId}-progress.json`), `${JSON.stringify({
+    runId: incompleteIdempotencyId,
+    status: "failed",
+    steps,
+    error: "invalid idempotency record",
+    events: [],
+    idempotencyKey: "incomplete-key-0001",
+  })}\n`, "utf8");
   const fileId = "run-00000000-0000-4000-8000-000000000102";
   const embeddedId = "run-00000000-0000-4000-8000-000000000103";
   await writeFile(join(workspaceDir, `${fileId}-progress.json`), `${JSON.stringify({ runId: embeddedId, status: "failed", steps, error: "already failed", events: [] })}\n`, "utf8");
@@ -140,7 +249,7 @@ test("server restart converts a persisted in-flight job into an explicit failed 
     assert.match(recovered.error, /interrupted by process restart/u);
     assert.equal(recovered.steps[1]?.status, "failed");
     assert.match(recovered.steps[1]?.error ?? "", /interrupted/u);
-    for (const ignoredId of [completedWithoutRunId, malformedId, fileId, embeddedId, mismatchedRunId]) {
+    for (const ignoredId of [completedWithoutRunId, malformedId, incompleteIdempotencyId, fileId, embeddedId, mismatchedRunId]) {
       assert.equal((await fetch(`${baseUrl}/api/runs/${ignoredId}`)).status, 404, `invalid recovery record ${ignoredId} stays unavailable`);
     }
   } finally {
@@ -158,11 +267,15 @@ test("HTTP run admission caps concurrency and retains only the newest ten jobs o
   });
   const concurrentUrl = await concurrentApp.start(0, "127.0.0.1");
   try {
-    const missingUpload = await createRun(concurrentUrl, ["00000000-0000-4000-8000-000000000000"]);
+    const missingUploadKey = "missing-upload-action-0001";
+    const missingUpload = await createRun(concurrentUrl, ["00000000-0000-4000-8000-000000000000"], missingUploadKey);
     assert.equal(missingUpload.response.status, 404);
     assert.equal(missingUpload.body.error, "Upload not found");
     assert.equal(concurrentApp.activeRunCount(), 0, "failed upload verification releases the reserved run slot");
     assert.equal(concurrentApp.jobCount(), 0, "failed upload verification removes the reserved job");
+    const recoveredAction = await createRun(concurrentUrl, undefined, missingUploadKey);
+    assert.equal(recoveredAction.response.status, 202, "a failed idempotent admission must release its key");
+    await waitForTerminal(concurrentUrl, recoveredAction.body.runId!);
 
     const [first, second] = await Promise.all([createRun(concurrentUrl), createRun(concurrentUrl)]);
     assert.equal(first.response.status, 202);
@@ -192,7 +305,7 @@ test("HTTP run admission caps concurrency and retains only the newest ten jobs o
   const runIds: string[] = [];
   try {
     for (let index = 0; index < MAX_RETAINED_RUNS + 2; index += 1) {
-      const created = await createRun(retainedUrl);
+      const created = await createRun(retainedUrl, undefined, `retained-action-${String(index).padStart(4, "0")}`);
       assert.equal(created.response.status, 202);
       runIds.push(created.body.runId!);
       assert.equal(await waitForTerminal(retainedUrl, created.body.runId!), "completed");
@@ -208,6 +321,15 @@ test("HTTP run admission caps concurrency and retains only the newest ten jobs o
     await assert.rejects(stat(join(retainedWorkspace, `${runIds[0]}-progress.json`)));
     const current = JSON.parse(await readFile(join(retainedWorkspace, "current.json"), "utf8")) as { id: string };
     assert.equal(current.id, runIds.at(-1));
+    const reusedPrunedKey = await createRun(
+      retainedUrl,
+      undefined,
+      "retained-action-0000",
+      "请评估制造企业生成式 AI 采购决策中的证据缺口与适用边界？",
+    );
+    assert.equal(reusedPrunedKey.response.status, 202, "retention must release the idempotency key of an evicted run");
+    assert.notEqual(reusedPrunedKey.body.runId, runIds[0]);
+    await waitForTerminal(retainedUrl, reusedPrunedKey.body.runId!);
   } finally {
     await retainedApp.stop();
   }

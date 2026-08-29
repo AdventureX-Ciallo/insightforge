@@ -285,7 +285,7 @@ export async function searchSelectedEngine(
   resolver?: SearchResolver,
 ) {
   const normalized = query.trim();
-  if (normalized.length < 2 || normalized.length > 160) throw new Error("Search query must contain 2–160 characters");
+  if ([...normalized].length < 2 || [...normalized].length > 160) throw new Error("Search query must contain 2–160 characters");
   const config = ENGINE_CONFIG[engine];
   const requestUrl = new URL(config.endpoint);
   requestUrl.searchParams.set(config.queryParameter, normalized);

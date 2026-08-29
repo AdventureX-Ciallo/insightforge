@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test } from "playwright/test";
@@ -55,8 +56,14 @@ test("React workbench completes the evidence, decision, update, and delivery pat
   await expect(page.getByText(/STALE/u).first()).toBeVisible();
   await expect(page.getByText(/重算结果/u)).toBeVisible();
 
+  await page.getByRole("button", { name: /第 3 步 · 研究报告/u }).click();
+  const staleConclusion = page.locator("#chapter-report article").filter({ hasText: "STALE" }).first();
+  await staleConclusion.getByRole("button", { name: "基于 v2 复核" }).click();
+  await expect(staleConclusion.getByText("STALE", { exact: true })).toHaveCount(0);
+
   await page.getByRole("button", { name: /第 5 步 · 交付/u }).click();
   await expect(page.getByRole("heading", { name: "成果交付" })).toBeVisible();
+  await expect(page.getByText(/v\d+ · 重新复核/u).first()).toBeVisible();
   await expect(page.getByText("PPTX · 可编辑五页模板")).toBeVisible();
   await expect(page.getByText("证据 JSON · 完整证据链")).toBeVisible();
   await expect(page.getByText("研究报告 · Markdown")).toBeVisible();
@@ -76,4 +83,134 @@ test("React workbench completes the evidence, decision, update, and delivery pat
   await mkdir(evidenceDir, { recursive: true });
   await page.screenshot({ path: resolve(evidenceDir, "insightforge-react-delivery.png"), fullPage: true });
   expect(externalRequests).toEqual([]);
+});
+
+test("selected search engine is sent to the backend and labels returned candidates", async ({ page }) => {
+  let observedBody: unknown;
+  await page.route("**/api/sources/search", async (route) => {
+    observedBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        engine: "google",
+        query: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+        capturedAt: "2026-08-29T00:00:00.000Z",
+        dnsResolution: [],
+        candidates: [{
+          title: "Google 候选来源",
+          url: "https://example.com/google-candidate",
+          engine: "google",
+          materialRole: "CANDIDATE_SOURCE",
+          authorityVerified: false,
+        }],
+        sourceLimitTrace: { discovered: 1, retained: 1, truncated: 0, limit: 10, reason: null },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /全功能研究案例/u }).click();
+  await page.getByText("实时服务 · 信源 / 核验 / 模型").click();
+  await page.getByRole("button", { name: "Google", exact: true }).click();
+  await page.getByRole("button", { name: "运行实时发现" }).click();
+
+  await expect(page.getByText(/google · 命中 1 条候选来源/u)).toBeVisible();
+  expect(observedBody).toEqual({
+    engine: "google",
+    query: "中国新能源乘用车渗透率增长是否受到公共充电基础设施约束？",
+  });
+});
+
+test("preconfigured model status displays only backend masks", async ({ page }) => {
+  await page.route("**/api/settings/llm", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        configured: true,
+        source: "api",
+        baseUrlMasked: "https://mo…/v1",
+        modelMasked: "gpt…5",
+        apiKeyMasked: "sk-…1234",
+        planMaxTokens: 8192,
+        synthesisMaxTokens: 16384,
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /全功能研究案例/u }).click();
+  await page.getByText("实时服务 · 信源 / 核验 / 模型").click();
+  await expect(page.getByText(/服务端已预配置端点：https:\/\/mo…\/v1 · gpt…5/u)).toBeVisible();
+  await expect(page.getByText(/sk-…1234/u)).toHaveCount(0);
+  await expect(page.getByText(/undefined/u)).toHaveCount(0);
+});
+
+test("rejected upload integrity never enters a run and backend errors stay visible", async ({ page }) => {
+  const bytes = Buffer.from("year,value\n2026,42\n", "utf8");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  let runBody: { uploadIds?: string[] } | undefined;
+
+  await page.route("**/api/uploads", async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        upload: {
+          id: "00000000-0000-4000-8000-000000000999",
+          originalFileName: "tampered.csv",
+          sanitizedFileName: "tampered.csv",
+          sizeBytes: bytes.length,
+          sha256,
+          verificationUrl: "/api/uploads/00000000-0000-4000-8000-000000000999",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/uploads/00000000-0000-4000-8000-000000000999", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ upload: { sha256, hashMatches: false } }),
+    });
+  });
+  await page.route("**/api/runs", async (route) => {
+    runBody = route.request().postDataJSON() as { uploadIds?: string[] };
+    await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "上传资料合同测试失败" }) });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /全功能研究案例/u }).click();
+  await page.getByText("资料库 · 验证并保存文件").click();
+  await page.getByLabel("选择资料文件").setInputFiles({ name: "tampered.csv", mimeType: "text/csv", buffer: bytes });
+  await expect(page.getByText("哈希不一致 · 已拒绝")).toBeVisible();
+  await expect(page.getByText("未加入下一次运行")).toBeVisible();
+
+  await page.getByRole("button", { name: "开始研究" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "上传资料合同测试失败" })).toBeVisible();
+  expect(runBody?.uploadIds).toEqual([]);
+});
+
+test("refresh reconnects to the backend-owned active run", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /全功能研究案例/u }).click();
+  const accepted = page.waitForResponse((response) => response.url().endsWith("/api/runs") && response.status() === 202);
+  await page.getByRole("button", { name: "开始研究" }).click();
+  await accepted;
+  await page.reload();
+  await page.getByRole("button", { name: /第 2 步 · 任务/u }).click();
+  await expect(page.getByRole("button", { name: "研究进行中…" })).toBeVisible();
+  await expect(page.getByText(/终态 NEEDS_REVIEW/u).last()).toBeVisible({ timeout: 25_000 });
+});
+
+test("model settings failure is not mislabeled as unconfigured", async ({ page }) => {
+  await page.route("**/api/settings/llm", async (route) => {
+    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Stored LLM settings are invalid" }) });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /全功能研究案例/u }).click();
+  await page.getByText("实时服务 · 信源 / 核验 / 模型").click();
+  await expect(page.getByText(/配置读取失败（HTTP 500）/u)).toBeVisible();
+  await expect(page.getByText(/服务端未预配置模型端点/u)).toHaveCount(0);
 });

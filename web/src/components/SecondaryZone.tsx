@@ -1,10 +1,14 @@
 import { ChevronDown, FileUp, Loader2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { registerUpload, useApp } from '../lib/engine'
+import { registerUpload, removeUpload, useApp } from '../lib/engine'
 
-const SEARCH_PROVIDERS = ['百度', 'Google', '必应']
-const MODEL_ENDPOINTS = ['Kimi', 'GPT-5', '通义千问', 'Claude']
+const SEARCH_PROVIDERS = [
+  { label: '百度', value: 'baidu' },
+  { label: 'Google', value: 'google' },
+  { label: '必应', value: 'bing' },
+] as const
+type SearchEngine = (typeof SEARCH_PROVIDERS)[number]['value']
 
 function Block({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
   return (
@@ -43,11 +47,12 @@ interface UploadResult {
   sanitized: string
   size: string
   uploadId?: string
+  hashMatches: boolean
 }
 
 /* 资料库：浏览器 / POST 回执 / 落盘复核 三方 SHA-256 一致才算成功 */
 function UploadZone() {
-  const { backend } = useApp()
+  const { backend, uploadedIds } = useApp()
   const inputRef = useRef<HTMLInputElement>(null)
   const [result, setResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -65,6 +70,10 @@ function UploadZone() {
       setError('仅接受 PDF / CSV / XLSX / TXT。')
       return
     }
+    if (backend === 'online' && uploadedIds.length >= 5) {
+      setError('每次研究最多选择 5 个上传资料；请移除一个待入链资料后再试。')
+      return
+    }
     setBusy(true)
     try {
       const buf = await file.arrayBuffer()
@@ -74,7 +83,8 @@ function UploadZone() {
       if (backend === 'online') {
         const { upload } = await api.upload(file)
         const { upload: verified } = await api.verifyUpload(upload.verificationUrl)
-        registerUpload(upload.id)
+        const hashMatches = verified.hashMatches && browserSha === upload.sha256 && browserSha === verified.sha256
+        if (hashMatches) registerUpload(upload.id)
         setResult({
           browserSha,
           serverSha: upload.sha256,
@@ -83,6 +93,7 @@ function UploadZone() {
           sanitized: upload.sanitizedFileName,
           size: `${(upload.sizeBytes / 1024).toFixed(1)} KB`,
           uploadId: upload.id,
+          hashMatches,
         })
       } else {
         setResult({
@@ -92,6 +103,7 @@ function UploadZone() {
           fileName: file.name,
           sanitized: file.name.replace(/[^\w.一-龥-]+/g, '_').slice(-80),
           size: `${(file.size / 1024).toFixed(1)} KB`,
+          hashMatches: true,
         })
       }
     } catch (e) {
@@ -101,7 +113,7 @@ function UploadZone() {
     }
   }
 
-  const allMatch = result && result.browserSha === result.serverSha && (result.verifySha === null || result.verifySha === result.browserSha)
+  const allMatch = result && result.hashMatches && result.browserSha === result.serverSha && (result.verifySha === null || result.verifySha === result.browserSha)
 
   return (
     <Block title="资料库 · 验证并保存文件" note="≤ 5 MiB · 三方 SHA-256 核验">
@@ -147,10 +159,18 @@ function UploadZone() {
               )}
             </p>
             <p className="mt-2 font-semibold text-conflict">
-              {result.uploadId ? '已保存 · 将随下次运行进入证据链' : '已保存，尚未进入证据链'}
+              {result.uploadId && allMatch
+                ? '已保存 · 将随下次运行进入证据链'
+                : result.verifySha === null
+                  ? '仅完成本地校验 · 未保存'
+                  : '未加入下一次运行'}
             </p>
+            {result.uploadId && allMatch && (
+              <button className="btn-ghost mt-2" onClick={() => removeUpload(result.uploadId!)}>从下一次运行移除</button>
+            )}
           </div>
         )}
+        {backend === 'online' && <p className="mt-3 text-xs text-ink-faint">待入链资料 {uploadedIds.length}/5</p>}
       </div>
     </Block>
   )
@@ -159,19 +179,24 @@ function UploadZone() {
 /* 实时信源发现：多搜索引擎，真实调用，成功/失败都留痕 */
 function LiveDiscovery() {
   const { view } = useApp()
-  const [engine, setEngine] = useState('bing')
+  const [engine, setEngine] = useState<SearchEngine>('bing')
   const [log, setLog] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
 
   const run = async () => {
+    if (busy) return
+    setBusy(true)
     const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     try {
-      const res = await api.liveSearch(view.question)
+      const res = await api.liveSearch(view.question, engine)
       setLog((l) => [
         ...l,
         `${ts} · ${res.provider} · 命中 ${res.results.length} 条候选来源（未进入证据链）${res.results[0] ? ` · 首条：${res.results[0].title.slice(0, 24)}` : ''}`,
-      ])
+      ].slice(-10))
     } catch (e) {
-      setLog((l) => [...l, `${ts} · ${engine} · 失败：${e instanceof Error ? e.message : '网络错误'} · 不静默使用快照`])
+      setLog((l) => [...l, `${ts} · ${engine} · 失败：${e instanceof Error ? e.message : '网络错误'} · 不静默使用快照`].slice(-10))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -179,12 +204,12 @@ function LiveDiscovery() {
     <div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-52 text-xs font-semibold">实时信源发现 · 多搜索引擎</span>
-        {SEARCH_PROVIDERS.map((p) => (
-          <Pill key={p} active={p.toLowerCase() === engine || (p === '必应' && engine === 'bing')} onClick={() => setEngine(p === '必应' ? 'bing' : p.toLowerCase())}>
-            {p}
+        {SEARCH_PROVIDERS.map((provider) => (
+          <Pill key={provider.value} active={provider.value === engine} onClick={() => setEngine(provider.value)}>
+            {provider.label}
           </Pill>
         ))}
-        <button className="btn-ghost" onClick={() => void run()}>运行实时发现</button>
+        <button className="btn-ghost" disabled={busy} aria-busy={busy} onClick={() => void run()}>{busy ? '发现中…' : '运行实时发现'}</button>
       </div>
       {log.length > 0 && (
         <ul className="mt-3 space-y-1.5" aria-live="polite">
@@ -247,23 +272,27 @@ function WhitelistCheck() {
   )
 }
 
-/* 多模型端点：只显示服务端预配置状态，页面不接收 API Key */
+/* 单一模型端点：只显示服务端预配置状态，页面不接收 API Key */
 function ModelSwitch() {
-  const [endpoint, setEndpoint] = useState(MODEL_ENDPOINTS[0])
   const [status, setStatus] = useState<string | null>(null)
 
   useEffect(() => {
     void (async () => {
       try {
         const res = await fetch('/api/settings/llm')
-        const body = (await res.json()) as { configured: boolean; baseUrl?: string; model?: string }
+        if (!res.ok) throw new Error(`配置读取失败（HTTP ${res.status}）`)
+        const body = (await res.json()) as {
+          configured: boolean
+          baseUrlMasked: string | null
+          modelMasked: string | null
+        }
         setStatus(
           body.configured
-            ? `服务端已预配置端点：${body.baseUrl} · ${body.model} · 密钥由部署者本机管理`
+            ? `服务端已预配置端点：${body.baseUrlMasked} · ${body.modelMasked} · 密钥由部署者本机管理`
             : '服务端未预配置模型端点 · 选择实时模式将被阻断 · 页面不接收或回显 API Key',
         )
-      } catch {
-        setStatus('后端未连接 · 无法查询端点配置状态')
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : '后端未连接 · 无法查询端点配置状态')
       }
     })()
   }, [])
@@ -271,14 +300,12 @@ function ModelSwitch() {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="w-52 text-xs font-semibold">实时候选生成 · 多模型端点</span>
-        {MODEL_ENDPOINTS.map((m) => (
-          <Pill key={m} active={m === endpoint} onClick={() => setEndpoint(m)}>{m}</Pill>
-        ))}
+        <span className="w-52 text-xs font-semibold">实时候选生成 · 单一预配置端点</span>
+        <span className="chip border-ink/15 bg-ink/[0.04] text-ink-soft">失败不自动切换模型</span>
       </div>
       {status && (
         <p className={`mt-3 text-xs leading-5 ${status.includes('未') ? 'text-insufficient' : 'text-supported'}`} role={status.includes('未') ? 'alert' : undefined}>
-          {endpoint} · {status}
+          {status}
         </p>
       )}
     </div>

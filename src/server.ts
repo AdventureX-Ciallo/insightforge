@@ -12,12 +12,13 @@ import { z } from "zod";
 
 import { researchRunSchema, runStepSchema, toolCallEventSchema, workflowStates, type ArtifactVersion, type ResearchRun, type RunStep, type ToolCallEvent } from "./domain.js";
 import { DomainError } from "./domain-error.js";
-import { hashFile } from "./hash.js";
+import { hashFile, hashValue } from "./hash.js";
 import { isMainModule } from "./main-module.js";
 import { atomicWriteJson } from "./atomic-file.js";
 import { loadPersistedRun, persistRun } from "./artifacts.js";
 import { buildBoundaryQuestions } from "./boundary-questions.js";
 import { MAX_RUN_SOURCES, MAX_RUN_UPLOADS, runGoldenCase, type CollectedUploadInput } from "./engine.js";
+import { resolveLlmConfig, type LlmConfig } from "./llm.js";
 import { applyHumanDecisionAndPersist, type HumanDecisionInput } from "./human-decision.js";
 import { applySourceUpdate } from "./source-update.js";
 import { revalidateConclusionAndPersist } from "./conclusion-revalidation.js";
@@ -26,13 +27,14 @@ import { researchPresets } from "./presets.js";
 import { MAX_CONCURRENT_RUNS, MAX_RETAINED_RUNS, progressFileRunId, pruneRunWorkspace } from "./run-retention.js";
 import { checkLiveSources, type AuthorityFetcher } from "./tools/live-source-check.js";
 import { searchLiveSingleProvider, type LiveSearchFetcher } from "./tools/live-source-search.js";
-import { FAKE_IP_PROXY_ERROR, searchEngines, searchSelectedEngine, type SearchFetcher, type SearchResolver } from "./tools/search-engines.js";
+import { FAKE_IP_PROXY_ERROR, searchEngines, searchSelectedEngine, validatePublicHttpUrlWithTrace, type SearchFetcher, type SearchResolver } from "./tools/search-engines.js";
 import { MAX_UPLOAD_SIZE_BYTES, sanitizeUploadFileName, UploadValidationError } from "./tools/upload-validator.js";
 import { maintainUploadRetention, persistUpload, UploadStoreError, verifyPersistedUpload } from "./upload-store.js";
 
 const LOOPBACK_ADDRESS_HOSTS = new Set(["127.0.0.1", "::1"]);
 const LOOPBACK_BIND_HOSTS = new Set([...LOOPBACK_ADDRESS_HOSTS, "localhost"]);
 const REQUEST_KEY_HEADER = "x-insightforge-request-key";
+const IDEMPOTENCY_KEY_HEADER = "x-insightforge-idempotency-key";
 const DISABLE_REQUEST_KEY_ENV = "INSIGHTFORGE_DISABLE_REQUEST_KEY";
 
 class RequestError extends Error {
@@ -82,6 +84,10 @@ function headerValue(request: IncomingMessage, name: string) {
   return typeof value === "string" ? value : null;
 }
 
+function codePointLength(value: string) {
+  return [...value].length;
+}
+
 export function enforceBrowserRequestBoundary(request: IncomingMessage, requestKey: string, disabled: boolean) {
   if (disabled) return;
   const origin = request.headers.origin;
@@ -104,23 +110,32 @@ function requestKeyBootstrap(requestKey: string, nonce: string) {
 
 interface Job {
   runId: string;
+  researchQuestion?: string;
+  createdAt?: string;
   status: "running" | "completed" | "failed";
   steps: RunStep[];
   error: string | null;
   events: ToolCallEvent[];
   run?: ResearchRun;
+  idempotencyKey?: string;
+  requestHash?: string;
 }
 
 const persistedJobSchema = z.object({
   runId: z.string().min(1),
+  researchQuestion: z.string().refine((value) => codePointLength(value) >= 8 && codePointLength(value) <= 240).optional(),
+  createdAt: z.string().datetime().optional(),
   status: z.enum(["running", "completed", "failed"]),
   steps: z.array(runStepSchema).length(5),
   error: z.string().nullable(),
   events: z.array(toolCallEventSchema),
   run: researchRunSchema.optional(),
+  idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/u).optional(),
+  requestHash: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
 }).strict().superRefine((job, ctx) => {
   if (job.status === "completed" && !job.run) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["run"], message: "Completed progress requires a ResearchRun" });
   if (job.run && job.run.id !== job.runId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["run", "id"], message: "Progress run ID mismatch" });
+  if (Boolean(job.idempotencyKey) !== Boolean(job.requestHash)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["idempotencyKey"], message: "Idempotency key and request hash must be stored together" });
 });
 
 interface RunEventSubscriber {
@@ -163,11 +178,42 @@ export function endSseStream(response: ServerResponse, chunk: string) {
   }
 }
 
+function publicSteps(steps: RunStep[]) {
+  return steps.map((step) => ({ ...step, error: step.error ? "Step failed" : null }));
+}
+
+function publicToolEvent(event: ToolCallEvent) {
+  return { ...event, error: event.error ? "Tool failed" : null };
+}
+
+interface JobMetadata {
+  researchQuestion?: string;
+  createdAt?: string;
+  run?: Pick<ResearchRun, "researchQuestion" | "createdAt">;
+  steps: Array<Pick<RunStep, "startedAt">>;
+}
+
+export function jobResearchQuestion(job: Pick<JobMetadata, "researchQuestion" | "run">) {
+  return job.researchQuestion ?? job.run?.researchQuestion ?? null;
+}
+
+export function jobCreatedAt(job: Pick<JobMetadata, "createdAt" | "run" | "steps">) {
+  return job.createdAt ?? job.run?.createdAt ?? job.steps.find((step) => step.startedAt)?.startedAt ?? null;
+}
+
+export function compareJobsByRecency(left: JobMetadata & { runId: string }, right: JobMetadata & { runId: string }) {
+  const leftTime = jobCreatedAt(left) ?? "";
+  const rightTime = jobCreatedAt(right) ?? "";
+  return rightTime.localeCompare(leftTime) || right.runId.localeCompare(left.runId);
+}
+
 function publicJob(job: Job) {
   return {
     runId: job.runId,
+    researchQuestion: jobResearchQuestion(job),
+    createdAt: jobCreatedAt(job),
     status: job.status,
-    steps: job.steps.map((step) => ({ ...step, error: step.error ? "Step failed" : null })),
+    steps: publicSteps(job.steps),
     error: job.error ? "Research run failed" : null,
   };
 }
@@ -178,6 +224,11 @@ function publicRun(run: ResearchRun) {
     artifacts: run.artifacts.map(({ path: _path, ...artifact }) => artifact),
     artifactHistory: run.artifactHistory.map(({ path: _path, ...artifact }) => artifact),
   };
+}
+
+export function llmCompletionEndpoint(baseUrl: string) {
+  const base = baseUrl.replace(/\/+$/u, "");
+  return base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
 }
 
 function publicArtifactVersion(run: ResearchRun, version: ArtifactVersion) {
@@ -223,6 +274,7 @@ export interface ServerOptions {
   sseIdleTimeoutMs?: number;
   sseWriter?: typeof writeSseChunk;
   loopbackResolver?: (hostname: string) => Promise<ReadonlyArray<{ address: string; family: number }>>;
+  llmResolver?: SearchResolver;
 }
 
 export async function resolveLoopbackBindHost(
@@ -247,7 +299,7 @@ const API_ROUTE_METHODS: Array<{ pattern: RegExp; methods: readonly string[] }> 
   { pattern: /^\/api\/runs$/u, methods: ["POST"] },
   { pattern: /^\/api\/runs\/[^/]+$/u, methods: ["GET"] },
   { pattern: /^\/api\/runs\/[^/]+\/events$/u, methods: ["GET"] },
-  { pattern: /^\/api\/runs\/[^/]+\/(?:decisions|source-update)$/u, methods: ["POST"] },
+  { pattern: /^\/api\/runs\/[^/]+\/(?:cancel|decisions|source-update)$/u, methods: ["POST"] },
   { pattern: /^\/api\/runs\/[^/]+\/conclusions\/[^/]+\/revalidate$/u, methods: ["POST"] },
   { pattern: /^\/api\/runs\/[^/]+\/(?:boundary-questions|artifact-versions(?:\/[^/]+)?|artifacts\/(?:PPTX|EVIDENCE_JSON|REPORT_MD|REPORT_PDF))$/u, methods: ["GET"] },
 ];
@@ -342,15 +394,20 @@ export async function discardRequestBody(request: IncomingMessage) {
 }
 
 export async function readUploadBytes(request: IncomingMessage) {
+  const maxDrainableUploadBytes = MAX_UPLOAD_SIZE_BYTES + 64 * 1024;
   const rawLength = request.headers["content-length"];
+  let oversized = false;
   if (rawLength !== undefined) {
     const declaredLength = Number(rawLength);
     if (!Number.isSafeInteger(declaredLength) || declaredLength < 0) {
       throw new RequestError(400, "Upload Content-Length is invalid");
     }
     if (declaredLength > MAX_UPLOAD_SIZE_BYTES) {
-      request.resume();
-      throw new RequestError(413, "Upload exceeds the 5 MiB limit");
+      if (declaredLength > maxDrainableUploadBytes) {
+        request.resume();
+        throw new RequestError(413, "Upload exceeds the 5 MiB limit");
+      }
+      oversized = true;
     }
   }
   const chunks: Buffer[] = [];
@@ -359,11 +416,16 @@ export async function readUploadBytes(request: IncomingMessage) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
     if (size > MAX_UPLOAD_SIZE_BYTES) {
-      request.resume();
-      throw new RequestError(413, "Upload exceeds the 5 MiB limit");
+      oversized = true;
+      if (size > maxDrainableUploadBytes) {
+        request.resume();
+        throw new RequestError(413, "Upload exceeds the 5 MiB limit");
+      }
+      continue;
     }
-    chunks.push(buffer);
+    if (!oversized) chunks.push(buffer);
   }
+  if (oversized) throw new RequestError(413, "Upload exceeds the 5 MiB limit");
   if (size === 0) throw new RequestError(400, "Upload body is empty");
   return Buffer.concat(chunks);
 }
@@ -498,6 +560,9 @@ export async function assertRuntimeAssets(publicDir: string, fixtureDir: string)
 
 export function createInsightForgeServer(options: ServerOptions) {
   const jobs = new Map<string, Job>();
+  const idempotentRunCreations = new Map<string, { requestHash: string; promise: Promise<{ runId: string; statusUrl: string }> }>();
+  const activeRunControllers = new Map<string, AbortController>();
+  const activeRunPromises = new Map<string, Promise<void>>();
   const eventSubscribers = new Map<string, Set<RunEventSubscriber>>();
   const runMutationQueues = new Map<string, Promise<void>>();
   const searchFetcher = options.searchFetcher ?? fetch;
@@ -507,6 +572,9 @@ export function createInsightForgeServer(options: ServerOptions) {
   const writeRunStream = options.sseWriter ?? writeSseChunk;
   const requestKey = randomUUID();
   const requestKeyProtectionDisabled = process.env[DISABLE_REQUEST_KEY_ENV] === "1";
+  if (requestKeyProtectionDisabled && process.env.NODE_ENV !== "test") {
+    throw new Error(`${DISABLE_REQUEST_KEY_ENV}=1 is permitted only when NODE_ENV=test`);
+  }
   let currentRun: ResearchRun | undefined;
   let currentRunPublication = Promise.resolve();
   let server: Server | undefined;
@@ -542,6 +610,20 @@ export function createInsightForgeServer(options: ServerOptions) {
         await persistJob(job);
       }
       jobs.set(job.runId, job);
+      if (job.idempotencyKey && job.requestHash) {
+        idempotentRunCreations.set(job.idempotencyKey, {
+          requestHash: job.requestHash,
+          promise: Promise.resolve({ runId: job.runId, statusUrl: `/api/runs/${job.runId}` }),
+        });
+      }
+    }
+  }
+
+  function forgetIdempotencyForRun(runId: string) {
+    for (const [key, entry] of idempotentRunCreations) {
+      void entry.promise.then((result) => {
+        if (result.runId === runId && idempotentRunCreations.get(key) === entry) idempotentRunCreations.delete(key);
+      }, () => undefined);
     }
   }
 
@@ -560,11 +642,16 @@ export function createInsightForgeServer(options: ServerOptions) {
     return [...jobs.values()].filter((job) => job.status === "running").length;
   }
 
+  function latestJob() {
+    return [...jobs.values()].sort(compareJobsByRecency)[0];
+  }
+
   function trimJobMap(targetSize = MAX_RETAINED_RUNS) {
     for (const [runId, job] of jobs) {
       if (jobs.size <= targetSize) break;
       if (job.status === "running" || runId === currentRun?.id) continue;
       jobs.delete(runId);
+      forgetIdempotencyForRun(runId);
       runMutationQueues.delete(runId);
     }
   }
@@ -575,6 +662,7 @@ export function createInsightForgeServer(options: ServerOptions) {
     const trace = await pruneRunWorkspace(options.workspaceDir, protectedRunIds);
     for (const runId of trace.removedRunIds) {
       jobs.delete(runId);
+      forgetIdempotencyForRun(runId);
       runMutationQueues.delete(runId);
     }
     trimJobMap();
@@ -654,9 +742,9 @@ export function createInsightForgeServer(options: ServerOptions) {
     request.once("aborted", cleanup);
     response.once("close", cleanup);
     response.on("error", cleanup);
-    if (!writeRunStream(response, formatSseEvent("step", { runId: job.runId, steps: job.steps }))) return;
+    if (!writeRunStream(response, formatSseEvent("step", { runId: job.runId, steps: publicSteps(job.steps) }))) return;
     for (const event of job.events) {
-      if (!writeRunStream(response, formatSseEvent("tool", { runId: job.runId, event }))) return;
+      if (!writeRunStream(response, formatSseEvent("tool", { runId: job.runId, event: publicToolEvent(event) }))) return;
     }
     if (job.status !== "running") {
       endSseStream(response, formatSseEvent("terminal", { runId: job.runId, status: job.status, error: job.error }));
@@ -674,10 +762,17 @@ export function createInsightForgeServer(options: ServerOptions) {
     eventSubscribers.set(job.runId, subscribers);
   }
 
-  async function startRun(runId: string, question: string, uploadedFiles: CollectedUploadInput[]) {
+  async function startRun(runId: string, question: string, uploadedFiles: CollectedUploadInput[], signal: AbortSignal) {
     const job = jobs.get(runId)!;
     try {
       const apiLlmConfig = await loadApiLlmSettings(options.workspaceDir);
+      const environmentLlmConfig = process.env.INSIGHTFORGE_LLM === "1" ? resolveLlmConfig() : null;
+      const effectiveLlmConfig: LlmConfig | null = apiLlmConfig ?? environmentLlmConfig;
+      if (effectiveLlmConfig) {
+        const endpoint = llmCompletionEndpoint(effectiveLlmConfig.baseUrl);
+        const hostname = new URL(endpoint).hostname.toLowerCase().replace(/\.$/u, "");
+        await validatePublicHttpUrlWithTrace(endpoint, [hostname], options.llmResolver);
+      }
       const run = await runGoldenCase({
         researchQuestion: question,
         fixtureDir: options.fixtureDir,
@@ -686,19 +781,20 @@ export function createInsightForgeServer(options: ServerOptions) {
         stepDelayMs,
         // 黄金路径默认使用经过 SHA-256、问题域、Schema 与引用 ID 校验的认证模型缓存；
         // 显式 INSIGHTFORGE_LLM=1 才调用单一在线端点，不做模型 fallback。
-        llmMode: apiLlmConfig || process.env.INSIGHTFORGE_LLM === "1" ? "auto" : "cached",
-        ...(apiLlmConfig ? { llmConfig: apiLlmConfig } : {}),
+        llmMode: effectiveLlmConfig || process.env.INSIGHTFORGE_LLM === "1" ? "auto" : "cached",
+        ...(effectiveLlmConfig ? { llmConfig: effectiveLlmConfig } : {}),
         uploadedFiles,
+        signal,
         publishCurrent: false,
         onProgress: async (steps) => {
           job.steps = steps;
           await persistJob(job);
-          publishRunEvent(runId, "step", { runId, steps });
+          publishRunEvent(runId, "step", { runId, steps: publicSteps(steps) });
         },
         onToolEvent: async (event) => {
           job.events.push(event);
           await persistJob(job);
-          publishRunEvent(runId, "tool", { runId, event });
+          publishRunEvent(runId, "tool", { runId, event: publicToolEvent(event) });
         },
       });
       await serializeRunMutation(runId, async () => {
@@ -711,12 +807,55 @@ export function createInsightForgeServer(options: ServerOptions) {
       closeRunStreams(job);
     } catch (error) {
       job.status = "failed";
-      job.error = "Research run failed";
+      job.error = signal.aborted ? "Research run cancelled" : "Research run failed";
       job.steps = job.steps.map((step) => ({ ...step, error: step.error ? "Step failed" : null }));
       await persistJob(job);
       closeRunStreams(job);
     }
     await maintainRunRetention();
+  }
+
+  function launchRun(runId: string, researchQuestion: string, uploadedFiles: CollectedUploadInput[]) {
+    const controller = new AbortController();
+    activeRunControllers.set(runId, controller);
+    const promise = startRun(runId, researchQuestion, uploadedFiles, controller.signal).finally(() => {
+      activeRunControllers.delete(runId);
+      activeRunPromises.delete(runId);
+    });
+    activeRunPromises.set(runId, promise);
+  }
+
+  async function admitRun(researchQuestion: string, uploadIds: string[], idempotencyKey?: string, requestHash?: string) {
+    trimJobMap(MAX_RETAINED_RUNS - 1);
+    if (activeRunCount() >= MAX_CONCURRENT_RUNS) {
+      throw new RequestError(429, `At most ${MAX_CONCURRENT_RUNS} research runs may execute concurrently`);
+    }
+    const runId = `run-${randomUUID()}`;
+    const job: Job = {
+      runId,
+      researchQuestion,
+      createdAt: new Date().toISOString(),
+      status: "running",
+      steps: pendingSteps(),
+      error: null,
+      events: [],
+      ...(idempotencyKey && requestHash ? { idempotencyKey, requestHash } : {}),
+    };
+    jobs.set(runId, job);
+    try {
+      const uploadedFiles: CollectedUploadInput[] = [];
+      for (const id of uploadIds) {
+        const verified = await verifyPersistedUpload(options.workspaceDir, id);
+        uploadedFiles.push({ id: verified.id, kind: verified.kind, originalFileName: verified.originalFileName, path: resolve(options.workspaceDir, verified.storageKey), sha256: verified.sha256, uploadedAt: verified.uploadedAt });
+      }
+      await persistJob(job);
+      launchRun(runId, researchQuestion, uploadedFiles);
+      return { runId, statusUrl: `/api/runs/${runId}` };
+    } catch (error) {
+      jobs.delete(runId);
+      forgetIdempotencyForRun(runId);
+      throw error;
+    }
   }
 
   async function route(request: IncomingMessage, response: ServerResponse) {
@@ -748,7 +887,8 @@ export function createInsightForgeServer(options: ServerOptions) {
         return;
       }
       if (method === "GET" && url.pathname === "/api/current") {
-        sendJson(response, 200, { run: currentRun ? publicRun(currentRun) : null });
+        const job = latestJob();
+        sendJson(response, 200, { run: currentRun ? publicRun(currentRun) : null, job: job ? publicJob(job) : null });
         return;
       }
       if (method === "GET" && url.pathname === "/api/settings/llm") {
@@ -778,13 +918,13 @@ export function createInsightForgeServer(options: ServerOptions) {
       }
       if (method === "POST" && url.pathname === "/api/sources/live-check") {
         await discardRequestBody(request);
-        sendJson(response, 200, await checkLiveSources(options.authorityFetcher));
+        sendJson(response, 200, await checkLiveSources(options.authorityFetcher, options.searchResolver));
         return;
       }
       if (method === "POST" && url.pathname === "/api/sources/live-search") {
         const body = await readJson(request);
         const query = typeof body.query === "string" ? body.query.trim() : "";
-        if (query.length < 2 || query.length > 160) {
+        if (codePointLength(query) < 2 || codePointLength(query) > 160) {
           sendJson(response, 400, { error: "query must contain 2–160 characters" });
           return;
         }
@@ -795,7 +935,7 @@ export function createInsightForgeServer(options: ServerOptions) {
         const body = await readJson(request);
         const engine = body.engine;
         const query = typeof body.query === "string" ? body.query.trim() : "";
-        if (typeof engine !== "string" || !searchEngines.includes(engine as (typeof searchEngines)[number]) || query.length < 2 || query.length > 160) {
+        if (typeof engine !== "string" || !searchEngines.includes(engine as (typeof searchEngines)[number]) || codePointLength(query) < 2 || codePointLength(query) > 160) {
           sendJson(response, 400, { error: "engine must be bing, google, or baidu and query must contain 2–160 characters" });
           return;
         }
@@ -810,7 +950,7 @@ export function createInsightForgeServer(options: ServerOptions) {
       if (method === "POST" && url.pathname === "/api/runs") {
         const body = await readJson(request);
         const researchQuestion = typeof body.researchQuestion === "string" ? body.researchQuestion.trim() : "";
-        if (researchQuestion.length < 8 || researchQuestion.length > 240) {
+        if (codePointLength(researchQuestion) < 8 || codePointLength(researchQuestion) > 240) {
           sendJson(response, 400, { error: "researchQuestion must contain 8–240 characters" });
           return;
         }
@@ -828,26 +968,40 @@ export function createInsightForgeServer(options: ServerOptions) {
           sendJson(response, 400, { error: "uploadIds must not contain duplicates", code: "DUPLICATE_UPLOAD_ID" });
           return;
         }
-        trimJobMap(MAX_RETAINED_RUNS - 1);
-        if (activeRunCount() >= MAX_CONCURRENT_RUNS) {
-          response.setHeader("retry-after", "1");
-          sendJson(response, 429, { error: `At most ${MAX_CONCURRENT_RUNS} research runs may execute concurrently`, code: "RUN_CAPACITY_EXCEEDED", maxConcurrentRuns: MAX_CONCURRENT_RUNS, maxRetainedRuns: MAX_RETAINED_RUNS });
+        const rawIdempotencyKey = request.headers[IDEMPOTENCY_KEY_HEADER];
+        if (rawIdempotencyKey !== undefined && (typeof rawIdempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/u.test(rawIdempotencyKey))) {
+          sendJson(response, 400, { error: "Idempotency key must contain 8–128 safe ASCII characters", code: "INVALID_IDEMPOTENCY_KEY" });
           return;
         }
-        const runId = `run-${randomUUID()}`;
-        const job: Job = { runId, status: "running", steps: pendingSteps(), error: null, events: [] };
-        jobs.set(runId, job);
-        try {
-          const uploadedFiles: CollectedUploadInput[] = [];
-          for (const id of uploadIds) {
-            const verified = await verifyPersistedUpload(options.workspaceDir, id as string);
-            uploadedFiles.push({ id: verified.id, kind: verified.kind, originalFileName: verified.originalFileName, path: resolve(options.workspaceDir, verified.storageKey), sha256: verified.sha256, uploadedAt: verified.uploadedAt });
+        const idempotencyKey = typeof rawIdempotencyKey === "string" ? rawIdempotencyKey : undefined;
+        const requestHash = hashValue({ researchQuestion, uploadIds: [...uploadIds].sort() });
+        let creation: Promise<{ runId: string; statusUrl: string }>;
+        if (idempotencyKey) {
+          const existing = idempotentRunCreations.get(idempotencyKey);
+          if (existing) {
+            if (existing.requestHash !== requestHash) {
+              sendJson(response, 409, { error: "Idempotency key was already used for a different run request", code: "IDEMPOTENCY_KEY_REUSED" });
+              return;
+            }
+            creation = existing.promise;
+          } else {
+            creation = admitRun(researchQuestion, uploadIds as string[], idempotencyKey, requestHash);
+            idempotentRunCreations.set(idempotencyKey, { requestHash, promise: creation });
           }
-          await persistJob(job);
-          void startRun(runId, researchQuestion, uploadedFiles);
-          sendJson(response, 202, { runId, statusUrl: `/api/runs/${runId}` });
+        } else {
+          creation = admitRun(researchQuestion, uploadIds as string[]);
+        }
+        try {
+          sendJson(response, 202, await creation);
         } catch (error) {
-          jobs.delete(runId);
+          if (idempotencyKey && idempotentRunCreations.get(idempotencyKey)?.promise === creation) {
+            idempotentRunCreations.delete(idempotencyKey);
+          }
+          if (error instanceof RequestError && error.status === 429) {
+            response.setHeader("retry-after", "1");
+            sendJson(response, 429, { error: error.message, code: "RUN_CAPACITY_EXCEEDED", maxConcurrentRuns: MAX_CONCURRENT_RUNS, maxRetainedRuns: MAX_RETAINED_RUNS });
+            return;
+          }
           throw error;
         }
         return;
@@ -860,6 +1014,21 @@ export function createInsightForgeServer(options: ServerOptions) {
           return;
         }
         openRunStream(request, response, job);
+        return;
+      }
+      const cancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+      if (method === "POST" && cancelMatch?.[1]) {
+        await discardRequestBody(request);
+        const job = jobs.get(cancelMatch[1]);
+        if (!job) {
+          sendJson(response, 404, { error: "Run not found" });
+          return;
+        }
+        if (job.status === "running") {
+          activeRunControllers.get(job.runId)?.abort(new Error("Research run cancelled by user"));
+          await activeRunPromises.get(job.runId);
+        }
+        sendJson(response, 200, { job: publicJob(job) });
         return;
       }
       const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
@@ -1066,7 +1235,10 @@ export function createInsightForgeServer(options: ServerOptions) {
       await recoverPersistedJobs();
       currentRun = await loadPersistedRun(options.workspaceDir) ?? undefined;
       if (currentRun) {
-        jobs.set(currentRun.id, { runId: currentRun.id, status: "completed", steps: currentRun.steps, error: null, events: currentRun.events, run: currentRun });
+        const recovered = jobs.get(currentRun.id);
+        jobs.set(currentRun.id, recovered
+          ? { ...recovered, status: "completed", steps: currentRun.steps, error: null, events: currentRun.events, run: currentRun }
+          : { runId: currentRun.id, researchQuestion: currentRun.researchQuestion, createdAt: currentRun.createdAt, status: "completed", steps: currentRun.steps, error: null, events: currentRun.events, run: currentRun });
       }
       await maintainRunRetention();
       server = createServer((request, response) => void route(request, response));
@@ -1090,6 +1262,8 @@ export function createInsightForgeServer(options: ServerOptions) {
     },
     async stop() {
       if (!server) return;
+      for (const controller of activeRunControllers.values()) controller.abort(new Error("InsightForge server stopped"));
+      await Promise.allSettled(activeRunPromises.values());
       const activeServer = server;
       await new Promise<void>((resolveClose, rejectClose) => activeServer.close((error) => settleServerClose(error, resolveClose, rejectClose)));
       server = undefined;
@@ -1114,6 +1288,43 @@ export async function startDefaultServer(root?: string, port?: number, host?: st
   return { app, url };
 }
 
+interface ShutdownRuntime {
+  exitCode: string | number | null | undefined;
+  once(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+}
+
+export function installGracefulShutdown(
+  app: { stop(): Promise<void> },
+  runtime: ShutdownRuntime = process,
+  logger: Pick<Console, "log" | "error"> = console,
+) {
+  let shuttingDown = false;
+  const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.log(`InsightForge received ${signal}; shutting down gracefully`);
+    try {
+      await app.stop();
+      runtime.exitCode = 0;
+    } catch {
+      logger.error("InsightForge graceful shutdown failed");
+      runtime.exitCode = 1;
+    }
+  };
+  runtime.once("SIGINT", () => void shutdown("SIGINT"));
+  runtime.once("SIGTERM", () => void shutdown("SIGTERM"));
+  return shutdown;
+}
+
+export function startupFailureMessage(error: unknown) {
+  return error instanceof Error ? error.message : "InsightForge failed to start";
+}
+
 if (isMainModule(import.meta.url, process.argv[1])) {
-  void startDefaultServer();
+  void startDefaultServer()
+    .then(({ app }) => installGracefulShutdown(app))
+    .catch((error: unknown) => {
+      console.error(startupFailureMessage(error));
+      process.exitCode = 1;
+    });
 }

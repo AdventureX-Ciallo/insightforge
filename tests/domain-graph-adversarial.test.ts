@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { applyHumanDecision, computeResearchSnapshotId, researchRunSchema, runGoldenCase, type ResearchRun } from "../src/index.js";
+import { writeArtifactVersion } from "../src/artifacts.js";
 
 test("schema lock rejects every forged cross-object edge and current-version invariant", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-graph-matrix-"));
@@ -169,6 +170,32 @@ test("schema lock rejects every forged cross-object edge and current-version inv
   rejected("decision to unknown revision", (run) => { run.humanDecisions[0]!.candidateRevisionId = "missing-revision"; }, decided);
   rejected("artifact version to unknown artifact", (run) => { run.artifactVersions[0]!.artifactIds = ["missing-artifact"]; });
   rejected("artifact chain without one current version", (run) => { run.artifactVersions[0]!.status = "SUPERSEDED"; });
+  rejected("first artifact version cannot supersede an unknown version", (run) => { run.artifactVersions[0]!.supersedesId = "missing-version"; });
+  rejected("artifact version cannot supersede itself", (run) => { run.artifactVersions[0]!.supersedesId = run.artifactVersions[0]!.id; });
+  rejected("artifact eviction count cannot forge missing history", (run) => { run.evictedArtifactVersionCount = 2; });
+  rejected("artifact version cannot rewrite rejected-draft overflow trace", (run) => {
+    run.artifactVersions[0]!.rejectedDraftOverflowCount += 1;
+  });
+
+  const twoVersion = structuredClone(valid);
+  await writeArtifactVersion(twoVersion, workspaceDir, "HUMAN_DECISION", {
+    triggerRef: "schema-chain-test",
+    adjustmentNote: "create a second immutable artifact version",
+  });
+  assert.equal(researchRunSchema.safeParse(twoVersion).success, true);
+  rejected("artifact versions must stay in ascending order", (run) => { run.artifactVersions.reverse(); }, twoVersion);
+  rejected("artifact version must point to its immediate predecessor", (run) => {
+    run.artifactVersions[1]!.supersedesId = run.artifactVersions[1]!.id;
+  }, twoVersion);
+
+  const retainedAfterEviction = structuredClone(twoVersion);
+  retainedAfterEviction.artifactVersions = retainedAfterEviction.artifactVersions.slice(1);
+  retainedAfterEviction.artifactHistory = retainedAfterEviction.artifactHistory.filter((artifact) => artifact.version !== 1);
+  retainedAfterEviction.evictedArtifactVersionCount = 1;
+  assert.equal(researchRunSchema.safeParse(retainedAfterEviction).success, true, "a retained chain preserves the evicted predecessor reference");
+  rejected("oldest retained artifact version cannot erase its evicted predecessor", (run) => {
+    run.artifactVersions[0]!.supersedesId = null;
+  }, retainedAfterEviction);
 
   const preDelivery = structuredClone(valid);
   preDelivery.artifacts = [];

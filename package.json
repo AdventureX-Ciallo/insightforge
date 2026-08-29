@@ -1,6 +1,7 @@
 {
   "name": "insightforge",
   "version": "0.1.0",
+  "packageManager": "npm@11.4.2",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -29,7 +30,6 @@
     "secret-scan": "node scripts/secret-scan.mjs",
     "presmoke": "npm run build",
     "smoke": "node scripts/smoke.mjs",
-    "prestart": "npm run build",
     "start": "node dist/server.js",
     "pretest": "npm run build:web",
     "test": "node scripts/test-command.mjs tests",
