@@ -7,16 +7,6 @@ import test from "node:test";
 import { runGoldenCase } from "../src/index.js";
 import { markdownReport, reportModel, writePdfReport } from "../src/tools/report-export.js";
 
-function utf16BeHex(value: string) {
-  const bytes = Buffer.from(value, "utf16le");
-  for (let index = 0; index < bytes.length; index += 2) {
-    const first = bytes[index]!;
-    bytes[index] = bytes[index + 1]!;
-    bytes[index + 1] = first;
-  }
-  return bytes.toString("hex").toUpperCase();
-}
-
 test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence snapshot", async () => {
   const workspaceDir = await mkdtemp(join(tmpdir(), "insightforge-report-export-"));
   const run = await runGoldenCase({
@@ -46,9 +36,15 @@ test("DELIVER creates parseable Markdown, PDF, PPTX, and JSON from one evidence 
   }).promise;
   assert.ok(document.numPages >= 1);
   const serializedPdf = pdfBytes.toString("ascii");
-  for (const text of ["InsightForge 研究报告", `研究问题：${run.researchQuestion}`, "来源定位"]) {
-    assert.ok(serializedPdf.includes(`/ActualText <FEFF${utf16BeHex(text)}>`), `PDF retains machine-readable text for ${text}`);
+  assert.match(serializedPdf, /\/FontFile(?:2|3)\b/u, "PDF embeds a CJK font program");
+  assert.doesNotMatch(serializedPdf, /\/STSong-Light\b/u, "PDF does not depend on viewer-side STSong substitution");
+  const extractedPages: string[] = [];
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const content = await (await document.getPage(pageNumber)).getTextContent();
+    extractedPages.push(content.items.map((item) => "str" in item ? item.str : "").join(""));
   }
+  const extractedText = extractedPages.join("\n");
+  for (const text of ["InsightForge 研究报告", `研究问题：${run.researchQuestion}`, "来源定位"]) assert.ok(extractedText.includes(text), `PDF retains machine-readable text for ${text}`);
 
   const sparseRun = structuredClone(run);
   sparseRun.conflicts = [];
